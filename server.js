@@ -133,8 +133,8 @@ const server = http.createServer(async (req, res) => {
          单人购买永远 = 基准价 9.90；只有多人同时付款才 +0.01 区分（V免签到账通知里只有金额可辨认） */
       let amount = CFG.PRICE;
       if (vmqReady()) {
-        /* 15 分钟前的老挂单作废（V免签匹配窗口只有10分钟，超窗必然匹配不上，留着只会占金额号位） */
-        const expireSince = new Date(Date.now() - 15 * 60000).toISOString();
+        /* 超时作废窗口与 V免签匹配窗口一致：超窗必然匹配不上，不如明示过期让客户重开 */
+        const expireSince = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
         try { await sb('PATCH', '/shop_orders?status=eq.pending&created_at=lt.' + expireSince, { status: 'expired' }); } catch (e) {}
         /* 金额与所有 pending 订单查重（不限时间窗）：保证"金额↔订单"一一对应，
            客户在哪个页面付款，码就发到哪个页面，绝不串单 */
@@ -154,7 +154,7 @@ const server = http.createServer(async (req, res) => {
     /* 订单支付页（刷新安全：按订单号读库渲染，不新建订单） */
     if (p.startsWith('/pay/TLB')) {
       const orderNo = p.slice(5);
-      const ors = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=order_no,status,amount,code&limit=1');
+      const ors = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=order_no,status,amount,code,created_at&limit=1');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax' });
       if (!ors.length) {
         return res.end(page('订单不存在', `<h1>订单不存在</h1><div class="tip">请回到购买页重新下单，或加微信 <b>${CFG.WECHAT}</b> 咨询</div>`));
@@ -178,6 +178,7 @@ const server = http.createServer(async (req, res) => {
           <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
           <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 长按粘贴或输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后回到本页，自动弹出激活码</div>
           <div id="st" class="small">⏳ 等待支付中…（付款后不用刷新，本页会自动监测）</div>
+          <div id="cd" class="small" style="color:#c2554f;font-weight:700"></div>
           <div id="code"></div>
           <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="manualCheck()">✅ 我已付款 · 立即查询结果</button>
           <div id="help" style="display:none;background:#fff8e6;border:1px solid #e8b93c;border-radius:10px;padding:10px;margin-top:12px;font-size:12.5px;line-height:1.8">
@@ -202,6 +203,13 @@ const server = http.createServer(async (req, res) => {
           let CHECKS=0, CODE_SAVED='';
           const OWN='${esc(o.order_no)}';
           function lastOrder(){ const m=document.cookie.match(/(?:^|;\s*)tlb_last_order=([^;]+)/); return m?m[1]:''; }
+          /* 订单剩余时间倒计时：超过匹配窗口必然匹配不上付款，明示客户重开 */
+          const LEFT=Math.max(0, ${CFG.VMQ_MINUTES}*60 - Math.floor((Date.now() - new Date('${esc(o.created_at)}').getTime())/1000));
+          function showTimeout(){
+            document.getElementById('st').innerHTML='⌛ 本单已超时（${CFG.VMQ_MINUTES}分钟未支付）<br/><a href="/buy" style="color:#2e9e5b;font-weight:700">🔄 点击重新购买</a>（若刚已付款，回到最新购买页即可看到激活码）';
+            document.getElementById('cd').innerHTML='';
+            CODE_SAVED='EXPIRED';
+          }
           function showCode(code){
             document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
             document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+code+'</div><div class="tip">👆 点击复制激活码</div>';
@@ -210,6 +218,7 @@ const server = http.createServer(async (req, res) => {
             document.getElementById('overlay').style.display='flex';
           }
           async function poll(showHint){
+            if(LEFT<=0 && !CODE_SAVED){ showTimeout(); return true; }
             /* 同时核查：本单 + 该浏览器最新开的订单。
                客户付款前犹豫、返回重新购买会开多张页面——任意一张付了款，所有页面都会弹码 */
             const ids=[...new Set([lastOrder(), OWN].filter(Boolean))];
@@ -219,7 +228,7 @@ const server = http.createServer(async (req, res) => {
                 const j=await r.json();
                 if(j.status==='delivered'&&j.code){ showCode(j.code); return true; }
                 if(id===OWN){
-                  if(j.status==='expired'){document.getElementById('st').innerHTML='⌛ 本单已超时，请重新购买（若刚已付款，回到最新购买页即可看到激活码）';CODE_SAVED='EXPIRED';return true;}
+                  if(j.status==='expired'){showTimeout();return true;}
                   if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
                 }
               }catch(e){}
@@ -240,6 +249,9 @@ const server = http.createServer(async (req, res) => {
           /* 60 秒还没结果 → 弹出醒目求助框（付错金额自助补救） */
           setTimeout(()=>{ const h=document.getElementById('help'); if(h&&!CODE_SAVED) h.style.display='block'; },60000);
           poll(false); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
+          const cdEl=document.getElementById('cd');
+          const cdTick=()=>{ if(CODE_SAVED) return; const m=Math.floor(LEFT/60), s=LEFT%60; cdEl.innerHTML='⏰ 本单 <b>'+m+'分'+String(s).padStart(2,'0')+'秒</b> 内有效，超时请重新购买'; };
+          cdTick(); setInterval(cdTick,1000);
           <\/script>`));
     }
 
