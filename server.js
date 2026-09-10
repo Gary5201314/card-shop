@@ -213,24 +213,49 @@ const server = http.createServer(async (req, res) => {
           <div class="price"><b>¥${esc(o.amount)}</b><br/><i>⚠️ 必须按上面金额精确支付（多一分少一分都无法自动确认）</i></div>
           <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
           <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后本页自动跳出激活码，无需加微信</div>
-          <div id="st" class="small">⏳ 等待支付中…（本页每 2.5 秒自动查询支付结果，不需要刷新）</div>
+          <div id="st" class="small">⏳ 等待支付中…（付款后不用刷新，本页会自动监测）</div>
           <div id="code"></div>
+          <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="manualCheck()">✅ 我已付款 · 立即查询结果</button>
           <div class="tip">拿到激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
+          <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99;align-items:center;justify-content:center">
+            <div style="background:#fff;border-radius:16px;padding:24px 20px;max-width:320px;width:86%;text-align:center">
+              <div style="font-size:38px">🎉</div>
+              <div style="font-size:17px;font-weight:800;margin:6px 0 4px">支付成功！激活码已生成</div>
+              <div class="code-box" id="ovcode" onclick="navigator.clipboard.writeText(this.textContent.trim());this.textContent='已复制 ✓';setTimeout(()=>{this.textContent=CODE_SAVED},900)" style="cursor:pointer"></div>
+              <div class="small">👆 点击复制激活码</div>
+              <button class="btn" style="margin-top:12px" onclick="this.parentElement.parentElement.style.display='none'">知道了</button>
+            </div>
+          </div>
           <script>
-          async function poll(){
+          let CHECKS=0, CODE_SAVED='';
+          async function poll(showHint){
             try{
               const r=await fetch('/order/status?id=${esc(o.order_no)}');
               const j=await r.json();
               if(j.status==='delivered'&&j.code){
                 document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
                 document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+j.code+'</div><div class="tip">👆 点击复制激活码</div>';
-                return;
+                CODE_SAVED=j.code;
+                document.getElementById('ovcode').textContent=j.code;
+                const ov=document.getElementById('overlay'); ov.style.display='flex';
+                return true;
               }
-              if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';}
+              if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
             }catch(e){}
-            setTimeout(poll,2500);
+            CHECKS++;
+            if(showHint||CHECKS===3){
+              document.getElementById('st').innerHTML='⏳ 后台正在核实你的付款，请等几秒…<br/><span style="font-size:11px">若 1 分钟后仍无结果：请确认支付金额精确为 <b>¥${esc(o.amount)}</b>，或加微信 <b>${CFG.WECHAT}</b> 处理</span>';
+            }
+            return false;
           }
-          poll();
+          async function manualCheck(){
+            document.getElementById('st').innerHTML='⏳ 正在向后台核实支付结果，请等 3-10 秒…';
+            const done=await poll(false);
+            if(!done) setTimeout(poll,2500);
+          }
+          /* 从微信切回本页时自动立即核查一次 */
+          document.addEventListener('visibilitychange',()=>{ if(!document.hidden) manualCheck(); });
+          poll(false); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
           <\/script>`));
     }
 
