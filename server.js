@@ -307,20 +307,29 @@ const server = http.createServer(async (req, res) => {
       const price = (u.searchParams.get('price') || '').replace(/[^0-9.]/g, '');
       const sign = u.searchParams.get('sign') || '';
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      if (!CFG.VMQ_KEY || md5(type + price + t + CFG.VMQ_KEY) !== sign) return res.end('{"code":-1,"msg":"签名校验不通过"}');
+      const signOk = !!(CFG.VMQ_KEY && md5(type + price + t + CFG.VMQ_KEY) === sign);
+      /* 行车记录仪：App 每次推送（含签名失败）都落一条 __vmq_push_* 记录，后台可查 —— 没有记录=App根本没推过来 */
+      try {
+        await sb('POST', '/shop_codes', { code: '__vmq_push_' + Date.now(), status: 'system', sold_at: new Date().toISOString(), order_no: ('type=' + type + ' price=' + price + ' ' + (signOk ? 'OK' : '签名失败')).slice(0, 60) });
+        /* 清理 2 天前的推送日志，防堆积 */
+        if (Math.random() < 0.1) { const cutoff = new Date(Date.now() - 2 * 86400000).toISOString(); try { await sb('DELETE', '/shop_codes?code=like.__vmq_push_*&sold_at=lt.' + cutoff); } catch (e) {} }
+      } catch (e) {}
+      if (!signOk) return res.end('{"code":-1,"msg":"签名校验不通过"}');
       /* 按金额匹配近 N 分钟内最早的 pending 订单 → 标记已付 → 自动发码 */
-      const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
-      let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
-      /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。若窗口内只有 1 笔待付订单，那必然是他的 → 直接匹配，
-         避免"付了钱但差一分钱发不出码"的死局；多笔并发时不猜，交人工 */
-      if (!rows.length) {
-        const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no&order=created_at.asc');
-        if (all.length === 1) rows = all;
-      }
-      if (rows.length) {
-        await markPaid(rows[0].order_no);
-        await deliverCode(rows[0].order_no);
-      }
+      try {
+        const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
+        let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
+        /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。若窗口内只有 1 笔待付订单，那必然是他的 → 直接匹配，
+           避免"付了钱但差一分钱发不出码"的死局；多笔并发时不猜，交人工 */
+        if (!rows.length) {
+          const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no&order=created_at.asc');
+          if (all.length === 1) rows = all;
+        }
+        if (rows.length) {
+          await markPaid(rows[0].order_no);
+          await deliverCode(rows[0].order_no);
+        }
+      } catch (e) { /* 匹配环节出错也不能丢推送记录，lastpay 照样更新 */ }
       vmqMark('lastpay');
       return res.end('{"code":1,"msg":"成功"}');
     }
@@ -334,7 +343,10 @@ const server = http.createServer(async (req, res) => {
       const lastpay = rows.find(r => r.code === '__vmq_lastpay');
       const online = !!(heart && heart.sold_at && (Date.now() - new Date(heart.sold_at).getTime() < 3 * 60000));
       const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '无记录';
-      return res.end(JSON.stringify({ ok: true, online, lastheart: fmt(heart && heart.sold_at), lastpay: fmt(lastpay && lastpay.sold_at) }));
+      /* 最近 10 条 App 推送记录（行车记录仪） */
+      let pushes = [];
+      try { pushes = await sb('GET', '/shop_codes?code=like.__vmq_push_*&select=order_no,sold_at&order=created_at.desc&limit=10'); } catch (e) {}
+      return res.end(JSON.stringify({ ok: true, online, lastheart: fmt(heart && heart.sold_at), lastpay: fmt(lastpay && lastpay.sold_at), pushes: pushes.map(r => ({ info: r.order_no || '', at: fmt(r.sold_at) })) }));
     }
 
     if (p === '/order') {
@@ -451,9 +463,18 @@ const server = http.createServer(async (req, res) => {
         async function vmqst(){
           const k=document.getElementById('k').value.trim();
           if(!k){alert('先填密钥');return;}
+          document.getElementById('vmqout').textContent='检查中…';
           const r=await fetch('/admin/vmqstat?key='+encodeURIComponent(k));
           const j=await r.json();
-          document.getElementById('vmqout').textContent=j.ok?(j.online?('🟢 监听App在线（最后心跳 '+j.lastheart+'，最后到账 '+j.lastpay+'）'):('🔴 监听App离线！检查手机是否开机、V免签App是否在运行')):('❌ '+j.error);
+          if(!j.ok){document.getElementById('vmqout').textContent='❌ '+j.error;return;}
+          let html=j.online
+            ?('🟢 监听App在线（最后心跳 '+j.lastheart+'，最后到账 '+j.lastpay+'）')
+            :('🔴 监听App离线！检查手机是否开机、V免签App是否在运行');
+          html+='<br/><b>最近推送记录（新的在上）：</b>';
+          html+=j.pushes&&j.pushes.length
+            ?j.pushes.map(p=>'<div style="font-size:11.5px;color:#555">'+p.at+' · '+p.info+'</div>').join('')
+            :'（空）——<b style="color:#d64545">一条推送都没有 = 手机App根本没把到账通知发给服务器</b>（权限/收款码主体问题，不是网站问题）';
+          document.getElementById('vmqout').innerHTML=html;
         }
         </script>
         <h1 style="font-size:15px;text-align:left;margin-top:16px">📊 查看库存</h1>
