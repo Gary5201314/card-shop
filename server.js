@@ -100,7 +100,7 @@ const server = http.createServer(async (req, res) => {
       const payTip = vmqReady()
         ? '<div class="tip">扫码微信支付 · 付款成功激活码<b>自动发送</b></div>'
         : `<div class="tip">⚠️ 支付通道配置中，暂请加微信 <b>${CFG.WECHAT}</b> 购买</div>`;
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(page(CFG.TITLE, `
         <div class="logo">🍰</div>
         <h1>甜老板 · 私域助手</h1>
@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
       await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount });
       /* 302 跳转到订单专属页：之后刷新/回退都不会再新建订单。
          cookie 记录该浏览器最新订单：客户犹豫重开多单时，付款后任意一张页面都能弹码 */
-      res.writeHead(302, { Location: '/pay/' + orderNo, 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax' });
+      res.writeHead(302, { Location: '/pay/' + orderNo, 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax', 'Cache-Control': 'no-store' });
       return res.end();
     }
 
@@ -168,7 +168,7 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/pay/TLB')) {
       const orderNo = p.slice(5);
       const ors = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=order_no,status,amount,code,created_at&limit=1');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax', 'Cache-Control': 'no-store' });
       if (!ors.length) {
         return res.end(page('订单不存在', `<h1>订单不存在</h1><div class="tip">请回到购买页重新下单，或加微信 <b>${CFG.WECHAT}</b> 咨询</div>`));
       }
@@ -293,7 +293,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/appHeart') {
       const t = u.searchParams.get('t') || '';
       const sign = u.searchParams.get('sign') || '';
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       if (!CFG.VMQ_KEY || md5(t + CFG.VMQ_KEY) !== sign) return res.end('{"code":-1,"msg":"签名校验不通过"}');
       vmqMark('heart');
       return res.end('{"code":1,"msg":"成功"}');
@@ -303,7 +303,7 @@ const server = http.createServer(async (req, res) => {
       const type = u.searchParams.get('type') || '';
       const price = (u.searchParams.get('price') || '').replace(/[^0-9.]/g, '');
       const sign = u.searchParams.get('sign') || '';
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       const signOk = !!(CFG.VMQ_KEY && md5(type + price + t + CFG.VMQ_KEY) === sign);
       /* 行车记录仪：App 每次推送（含签名失败）都落一条 __vmq_push_* 记录，后台可查 —— 没有记录=App根本没推过来 */
       try {
@@ -335,7 +335,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/admin/vmqstat') {
       if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       if (!CFG.VMQ_KEY) return res.end('{"ok":true,"online":false,"msg":"未配置VMQ_KEY"}');
       const rows = await sb('GET', '/shop_codes?code=in.(__vmq_heart,__vmq_lastpay)&select=code,sold_at');
       const heart = rows.find(r => r.code === '__vmq_heart');
@@ -350,7 +350,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/order') {
       const id = u.searchParams.get('id') || '';
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(page('我的激活码', `
         <h1>📦 我的订单</h1>
         <div class="small">订单号：${esc(id)}</div>
@@ -381,7 +381,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/order/status') {
       const id = u.searchParams.get('id') || '';
       const rows = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
-      if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ status: 'notfound' })); }
+      if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end(JSON.stringify({ status: 'notfound' })); }
       const o = rows[0];
       if (o.status === 'paid' && !o.code) await deliverCode(id);
       const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
@@ -390,7 +390,7 @@ const server = http.createServer(async (req, res) => {
       try {
         await sb('POST', '/shop_codes', { code: '__vmq_push_' + Date.now(), status: 'system', sold_at: new Date().toISOString(), order_no: ('页面查询 ' + id + ' → ' + o2.status + (o2.code ? ' 有码' : ' 无码')).slice(0, 60) });
       } catch (e) {}
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ status: o2.status, code: o2.code || null, amount: o2.amount || null }));
     }
 
@@ -499,7 +499,7 @@ const server = http.createServer(async (req, res) => {
         }
         <\/script>`);
       console.log('[admin] page built, length =', html.length);
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(html);
     }
     if (p === '/admin/markpaid' && req.method === 'POST') {
@@ -509,15 +509,15 @@ const server = http.createServer(async (req, res) => {
         if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
         const j = JSON.parse(body || '{}');
         const no = String(j.order_no || '').trim();
-        if (!no) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"error":"缺少订单号"}'); }
+        if (!no) { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end('{"error":"缺少订单号"}'); }
         const rows = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(no) + '&select=*');
-        if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"error":"订单不存在"}'); }
-        if (rows[0].status === 'delivered') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, code: rows[0].code, msg: '该订单早已发码' })); }
+        if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end('{"error":"订单不存在"}'); }
+        if (rows[0].status === 'delivered') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end(JSON.stringify({ ok: true, code: rows[0].code, msg: '该订单早已发码' })); }
         await markPaid(no);
         await deliverCode(no);
         const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(no) + '&select=*');
         const code = (rows2[0] || {}).code || null;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         return res.end(code ? JSON.stringify({ ok: true, code }) : JSON.stringify({ error: '库存不足：先去导入激活码' }));
       });
       return;
@@ -532,7 +532,7 @@ const server = http.createServer(async (req, res) => {
         const list = [...new Set(String(j.codes || '').split(/[\r\n,;，；]/).map(s => s.trim()).filter(Boolean))];
         if (!list.length) { res.writeHead(200); return res.end('{"error":"没有内容"}'); }
         await sb('POST', '/shop_codes', list.map(c => ({ code: c, status: 'unused' })));
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ ok: true, count: list.length }));
       });
       return;
@@ -542,13 +542,13 @@ const server = http.createServer(async (req, res) => {
       const unused = await sb('GET', '/shop_codes?status=eq.unused&select=code');
       const sold = await sb('GET', '/shop_codes?status=eq.sold&select=code');
       const orders = await sb('GET', '/shop_orders?select=order_no');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ ok: true, unused: unused.length, sold: sold.length, orders: orders.length }));
     }
     if (p === '/admin/orders') {
       if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
       const rows = await sb('GET', '/shop_orders?select=order_no,status,amount,code,created_at&order=created_at.desc&limit=15');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ ok: true, orders: rows }));
     }
 
