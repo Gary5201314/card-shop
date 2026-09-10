@@ -206,9 +206,8 @@ const server = http.createServer(async (req, res) => {
           /* 订单剩余时间倒计时：超过匹配窗口必然匹配不上付款，明示客户重开 */
           const LEFT=Math.max(0, ${CFG.VMQ_MINUTES}*60 - Math.floor((Date.now() - new Date('${esc(o.created_at)}').getTime())/1000));
           function showTimeout(){
-            document.getElementById('st').innerHTML='⌛ 本单已超时（${CFG.VMQ_MINUTES}分钟未支付）<br/><a href="/buy" style="color:#2e9e5b;font-weight:700">🔄 点击重新购买</a>（若刚已付款，回到最新购买页即可看到激活码）';
+            document.getElementById('st').innerHTML='⌛ 本单已超时（${CFG.VMQ_MINUTES}分钟未支付）<br/><a href="/buy" style="color:#2e9e5b;font-weight:700">🔄 点击重新购买</a><span style="font-size:11px;color:#8a817a">（放心：同浏览器任何一单付款成功，本页都会自动弹出激活码）</span>';
             document.getElementById('cd').innerHTML='';
-            CODE_SAVED='EXPIRED';
           }
           function showCode(code){
             document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
@@ -218,7 +217,8 @@ const server = http.createServer(async (req, res) => {
             document.getElementById('overlay').style.display='flex';
           }
           async function poll(showHint){
-            if(LEFT<=0 && !CODE_SAVED){ showTimeout(); return true; }
+            /* 超时/过期只改提示，绝不停止轮询——只要同浏览器任何一单发了码都要弹出来 */
+            if(LEFT<=0 && !CODE_SAVED) showTimeout();
             /* 同时核查：本单 + 该浏览器最新开的订单。
                客户付款前犹豫、返回重新购买会开多张页面——任意一张付了款，所有页面都会弹码 */
             const ids=[...new Set([lastOrder(), OWN].filter(Boolean))];
@@ -228,8 +228,8 @@ const server = http.createServer(async (req, res) => {
                 const j=await r.json();
                 if(j.status==='delivered'&&j.code){ showCode(j.code); return true; }
                 if(id===OWN){
-                  if(j.status==='expired'){showTimeout();return true;}
-                  if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
+                  if(j.status==='expired'){showTimeout();}
+                  if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';}
                 }
               }catch(e){}
             }
@@ -359,8 +359,7 @@ const server = http.createServer(async (req, res) => {
 
     /* 管理后台 */
     if (p === '/admin') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(page('发卡管理', `
+      const html = page('发卡管理', `
         <h1>🔑 发卡管理</h1>
         <div class="small">管理员密钥（链接带 ?key= 时自动填好，无需输入）：</div><input id="k" placeholder="ADMIN_KEY"/>
         <script>
@@ -461,7 +460,10 @@ const server = http.createServer(async (req, res) => {
           const j=await r.json();
           document.getElementById('st2').textContent=j.ok?('库存未售 '+j.unused+' · 已售 '+j.sold+' · 订单数 '+j.orders):('❌ '+j.error);
         }
-        <\/script>`));
+        <\/script>`);
+      console.log('[admin] page built, length =', html.length);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(html);
     }
     if (p === '/admin/markpaid' && req.method === 'POST') {
       let body = '';
