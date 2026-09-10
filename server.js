@@ -457,7 +457,7 @@ async function markPaid(orderNo) {
 /* 从库存取一个未售码发给订单（防并发：逐个尝试 update 抢占） */
 async function deliverCode(orderNo) {
   for (let i = 0; i < 5; i++) {
-    const pool = await sb('GET', '/shop_codes?status=eq.unused&select=code&limit=1');
+    const pool = await sb('GET', '/shop_codes?status=eq.unused&select=code&order=created_at.asc&limit=1');
     if (!pool.length) return;
     const code = pool[0].code;
     const r = await sb('PATCH', '/shop_codes?code=eq.' + encodeURIComponent(code) + '&status=eq.unused', { status: 'sold', sold_at: new Date().toISOString(), order_no: orderNo });
