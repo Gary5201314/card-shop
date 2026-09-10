@@ -336,7 +336,14 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(page('发卡管理', `
         <h1>🔑 发卡管理</h1>
-        <div class="small">管理员密钥：</div><input id="k" placeholder="ADMIN_KEY"/>
+        <div class="small">管理员密钥（链接带 ?key= 时自动填好，无需输入）：</div><input id="k" placeholder="ADMIN_KEY"/>
+        <script>
+        /* 自动预填：从 URL ?key= 读取密钥，免去手动输入 */
+        (function(){
+          const k = new URLSearchParams(location.search).get('key');
+          if(k){ document.getElementById('k').value = k; }
+        })();
+        </script>
         <h1 style="font-size:15px;text-align:left;margin-top:16px">📥 导入激活码（一行一个）</h1>
         <textarea id="codes" placeholder="TLB-M-XXXXXX-...&#10;TLB-M-XXXXXX-..."></textarea>
         <button class="btn" style="margin-top:10px" onclick="imp()">导入库存</button>
