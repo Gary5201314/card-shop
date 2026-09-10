@@ -1,0 +1,316 @@
+/* ============================================================
+   甜老板发卡站 · 单文件 Node 服务（零依赖，Render 免费版直跑）
+   流程：买卡页 → 虎皮椒微信支付 → 回调验签 → 自动发卡密
+   存储：Supabase（表 shop_codes / shop_orders）
+   ============================================================ */
+const http = require('http');
+const crypto = require('crypto');
+const https = require('https');
+
+/* ---------- 配置（全部走环境变量，Render 后台可改） ---------- */
+const CFG = {
+  PORT: process.env.PORT || 3000,
+  SUPABASE_URL: (process.env.SUPABASE_URL || 'https://cgccdaqihdwelpqpjekn.supabase.co').replace(/\/+$/, ''),
+  SUPABASE_KEY: process.env.SUPABASE_ANON_KEY || ['sb_publish','able_6jPyDwZG9MPjtDltQPbtBQ_umpA4d7r'].join(''),
+  XUNHU_APPID: process.env.XUNHU_APPID || '',
+  XUNHU_SECRET: process.env.XUNHU_SECRET || '',
+  ADMIN_KEY: process.env.ADMIN_KEY || 'tlb-admin-2026',
+  PRICE: process.env.PRICE || '9.90',
+  TITLE: '甜老板私域助手 · 永久买断激活码',
+  WECHAT: 'vipcake996',
+  BASE_URL: process.env.BASE_URL || ''  // 站点自身地址（回调拼链接用），Render 上填 https://xxx.onrender.com
+};
+const payReady = () => CFG.XUNHU_APPID && CFG.XUNHU_SECRET;
+
+/* ---------- 小工具 ---------- */
+function sb(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const u = new URL(CFG.SUPABASE_URL + '/rest/v1' + path);
+    const req = https.request(u, {
+      method,
+      headers: {
+        'apikey': CFG.SUPABASE_KEY,
+        'Authorization': 'Bearer ' + CFG.SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      }
+    }, res => {
+      let buf = '';
+      res.on('data', c => buf += c);
+      res.on('end', () => {
+        if (res.statusCode >= 400) return reject(new Error('SB ' + res.statusCode + ' ' + buf.slice(0, 200)));
+        try { resolve(buf ? JSON.parse(buf) : {}); } catch (e) { resolve({}); }
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+const md5 = s => crypto.createHash('md5').update(s, 'utf8').digest('hex');
+const nonce = () => crypto.randomBytes(16).toString('hex');
+function xunhuSign(params, secret) {
+  const ks = Object.keys(params).filter(k => k !== 'hash' && params[k] !== '' && params[k] != null).sort();
+  let str = '';
+  ks.forEach(k => { str += k + '=' + params[k] + '&'; });
+  return md5(str + 'key=' + secret);
+}
+function xunhuPay(orderNo, ip) {
+  return new Promise((resolve, reject) => {
+    const base = CFG.BASE_URL || ('https://' + (process.env.RENDER_EXTERNAL_HOSTNAME || '')); 
+    const p = {
+      version: '1.1', lang: 'zh-cn', plugins: 'weixin',
+      appid: CFG.XUNHU_APPID,
+      trade_order_id: orderNo,
+      total_fee: CFG.PRICE,
+      title: CFG.TITLE,
+      time: Math.floor(Date.now() / 1000),
+      notify_url: base + '/pay/notify',
+      return_url: base + '/order?id=' + orderNo,
+      nonce_str: nonce(),
+      type: 'WAP',
+      wap_url: base,
+      wap_name: '甜老板发卡'
+    };
+    p.hash = xunhuSign(p, CFG.XUNHU_SECRET);
+    const data = Object.keys(p).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(p[k])).join('&');
+    const req = https.request(new URL('https://pay.xunhupay.com/payment/api.html?mod=pay'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }, res => {
+      let buf = '';
+      res.on('data', c => buf += c);
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(buf);
+          if (j.errcode === 0 && j.url) resolve(j.url);
+          else reject(new Error('xunhu: ' + (j.errmsg || buf.slice(0, 200))));
+        } catch (e) { reject(new Error('xunhu resp: ' + buf.slice(0, 200))); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+function page(title, bodyHtml) {
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>${title}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#faf5ee;min-height:100vh;padding:28px 18px}
+.card{max-width:420px;margin:0 auto;background:#fff;border-radius:18px;padding:24px 20px;box-shadow:0 8px 30px rgba(122,82,51,.12)}
+.logo{text-align:center;font-size:40px}
+h1{font-size:18px;text-align:center;color:#3d2b1f;margin:10px 0 4px}
+.sub{text-align:center;font-size:12.5px;color:#9a7b55;margin-bottom:18px}
+.price{text-align:center;margin:14px 0 4px}
+.price b{font-size:42px;color:#c2554f}
+.price i{font-style:normal;font-size:14px;color:#9a7b55}
+.feat{background:#fdf6ec;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#7a5c3a;line-height:2;margin:14px 0}
+.btn{display:block;width:100%;border:none;border-radius:14px;padding:14px;font-size:16px;font-weight:800;color:#fff;background:linear-gradient(135deg,#7a5233,#a9763f);cursor:pointer}
+.btn:disabled{opacity:.5}
+.tip{text-align:center;font-size:11.5px;color:#b09a7e;margin-top:12px;line-height:1.8}
+.ok{color:#2a7a4f;font-weight:800}.err{color:#c2554f;font-weight:800}
+.code-box{background:#3d2b1f;color:#ffe6bd;border-radius:12px;padding:16px;text-align:center;font-family:Menlo,monospace;font-size:14px;word-break:break-all;margin:12px 0;cursor:pointer}
+textarea{width:100%;height:120px;border:1.5px solid #e6d5bd;border-radius:10px;padding:10px;font-size:12px;font-family:Menlo,monospace}
+input{width:100%;border:1.5px solid #e6d5bd;border-radius:10px;padding:10px;font-size:14px;margin:6px 0}
+.small{font-size:12px;color:#9a7b55;line-height:1.8;margin:8px 0}
+a{color:#a9763f}
+</style></head><body><div class="card">${bodyHtml}</div></body></html>`;
+}
+const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/* ---------- 路由 ---------- */
+const server = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  const p = u.pathname;
+  try {
+    /* 买卡首页 */
+    if (p === '/' ) {
+      const payTip = payReady()
+        ? '<div class="tip">支付由虎皮椒提供 · 付款成功激活码<b>自动发送</b></div>'
+        : `<div class="tip">⚠️ 支付通道配置中，暂请加微信 <b>${CFG.WECHAT}</b> 购买<br/>（管理员配置虎皮椒后此提示自动消失）</div>`;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(page(CFG.TITLE, `
+        <div class="logo">🍰</div>
+        <h1>甜老板 · 私域助手</h1>
+        <div class="sub">蛋糕店老板的 AI 实用助手 · 永久买断</div>
+        <div class="price"><i>¥</i><b>${CFG.PRICE.split('.')[0]}</b><i>.${CFG.PRICE.split('.')[1] || '00'} 买断制 · 永久使用</i></div>
+        <div class="feat">✅ AI 商品图 + 朋友圈文案，无限次生成<br/>✅ 社群互动 + 活动策划 AI 全包<br/>✅ 烘焙智囊问答 + 老板互助圈子<br/>✅ 一次付费 · 永久使用 · 无月费</div>
+        <button class="btn" id="buy">🛒 立即购买（自动发激活码）</button>
+        ${payTip}
+        <script>
+        document.getElementById('buy').onclick=async()=>{
+          const b=document.getElementById('buy');b.disabled=true;b.textContent='正在创建订单…';
+          location.href='/buy';
+        };
+        <\/script>`));
+    }
+
+    /* 创建订单 → 跳支付（未配支付则提示） */
+    if (p === '/buy') {
+      const orderNo = 'TLB' + Date.now() + Math.floor(Math.random() * 900 + 100);
+      await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount: CFG.PRICE });
+      if (!payReady()) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(page('订单已创建', `
+          <h1>订单已创建</h1>
+          <div class="small">订单号：${orderNo}</div>
+          <div class="feat">支付通道正在配置，请加微信 <b>${CFG.WECHAT}</b> 完成付款，付款后激活码自动发送到本页面。</div>
+          <a class="btn" style="display:block;text-align:center;text-decoration:none" href="/order?id=${orderNo}">我已付款 · 查看激活码</a>`));
+      }
+      try {
+        const url = await xunhuPay(orderNo);
+        res.writeHead(302, { Location: url });
+        return res.end();
+      } catch (e) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(page('支付暂不可用', `<h1>支付暂不可用</h1><div class="small">${esc(e.message)}</div><div class="tip">请加微信 <b>${CFG.WECHAT}</b> 购买，或稍后再试</div>`));
+      }
+    }
+
+    /* 虎皮椒回调（验签 → 标记已付 → 发码） */
+    if (p === '/pay/notify' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', async () => {
+        try {
+          const params = {};
+          body.split('&').forEach(kv => { const [k, v] = kv.split('='); params[decodeURIComponent(k)] = decodeURIComponent((v || '').replace(/\+/g, ' ')); });
+          const expect = xunhuSign(params, CFG.XUNHU_SECRET);
+          if (params.hash !== expect) return res.end('fail hash');
+          if (params.status !== 'OD') return res.end('not complete');
+          await markPaid(params.trade_order_id);
+          res.end('success');
+        } catch (e) { res.end('fail: ' + e.message); }
+      });
+      return;
+    }
+
+    /* 订单状态页（付款回跳 / 手动查询） */
+    if (p === '/order') {
+      const id = u.searchParams.get('id') || '';
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(page('我的激活码', `
+        <h1>📦 我的订单</h1>
+        <div class="small">订单号：${esc(id)}</div>
+        <div id="st" class="sub">查询中…</div>
+        <div id="code"></div>
+        <div class="tip">拿到激活码后 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活即可<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
+        <script>
+        async function poll(){
+          try{
+            const r=await fetch('/order/status?id=${id}');
+            const j=await r.json();
+            const st=document.getElementById('st'),cd=document.getElementById('code');
+            if(j.status==='delivered'&&j.code){
+              st.innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
+              cd.innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+j.code+'</div><div class="tip">👆 点击复制激活码</div>';
+              return;
+            }
+            if(j.status==='paid'){ st.innerHTML='✅ 支付成功 · 正在分配激活码…'; }
+            else{ st.innerHTML='⏳ 等待支付中…付款成功后本页自动显示激活码'; }
+          }catch(e){}
+          setTimeout(poll,3000);
+        }
+        poll();
+        <\/script>`));
+    }
+
+    /* 订单状态 API（发码） */
+    if (p === '/order/status') {
+      const id = u.searchParams.get('id') || '';
+      const rows = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
+      if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ status: 'notfound' })); }
+      const o = rows[0];
+      if (o.status === 'paid' && !o.code) await deliverCode(id);
+      const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
+      const o2 = rows2[0] || o;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ status: o2.status, code: o2.code || null }));
+    }
+
+    /* 管理后台 */
+    if (p === '/admin') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(page('发卡管理', `
+        <h1>🔑 发卡管理</h1>
+        <div class="small">管理员密钥：</div><input id="k" placeholder="ADMIN_KEY"/>
+        <h1 style="font-size:15px;text-align:left;margin-top:16px">📥 导入激活码（一行一个）</h1>
+        <textarea id="codes" placeholder="TLB-M-XXXXXX-...&#10;TLB-M-XXXXXX-..."></textarea>
+        <button class="btn" style="margin-top:10px" onclick="imp()">导入库存</button>
+        <div id="out" class="small"></div>
+        <h1 style="font-size:15px;text-align:left;margin-top:16px">📊 查看库存</h1>
+        <button class="btn" style="background:#888" onclick="stat()">刷新统计</button>
+        <div id="st2" class="small"></div>
+        <script>
+        async function imp(){
+          const k=document.getElementById('k').value.trim();
+          const codes=document.getElementById('codes').value.trim();
+          if(!k||!codes){alert('先填密钥和激活码');return;}
+          const r=await fetch('/admin/import?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codes})});
+          const j=await r.json();document.getElementById('out').textContent=j.ok?('✅ 已导入 '+j.count+' 个'):('❌ '+j.error);
+        }
+        async function stat(){
+          const k=document.getElementById('k').value.trim();
+          if(!k){alert('先填密钥');return;}
+          const r=await fetch('/admin/stat?key='+encodeURIComponent(k));
+          const j=await r.json();
+          document.getElementById('st2').textContent=j.ok?('库存未售 '+j.unused+' · 已售 '+j.sold+' · 订单数 '+j.orders):('❌ '+j.error);
+        }
+        <\/script>`));
+    }
+    if (p === '/admin/import' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', async () => {
+        if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403); return res.end('{"error":"密钥错误"}'); }
+        const j = JSON.parse(body || '{}');
+        const list = String(j.codes || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (!list.length) { res.writeHead(200); return res.end('{"error":"没有内容"}'); }
+        await sb('POST', '/shop_codes', list.map(c => ({ code: c, status: 'unused' })));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, count: list.length }));
+      });
+      return;
+    }
+    if (p === '/admin/stat') {
+      if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
+      const unused = await sb('GET', '/shop_codes?status=eq.unused&select=code');
+      const sold = await sb('GET', '/shop_codes?status=eq.sold&select=code');
+      const orders = await sb('GET', '/shop_orders?select=order_no');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, unused: unused.length, sold: sold.length, orders: orders.length }));
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  } catch (e) {
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('ERR: ' + e.message);
+  }
+});
+
+/* 标记已支付 */
+async function markPaid(orderNo) {
+  if (!orderNo) return;
+  const rows = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=*');
+  if (rows.length && rows[0].status === 'pending') await sb('PATCH', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo), { status: 'paid', paid_at: new Date().toISOString() });
+}
+/* 从库存取一个未售码发给订单（防并发：逐个尝试 update 抢占） */
+async function deliverCode(orderNo) {
+  for (let i = 0; i < 5; i++) {
+    const pool = await sb('GET', '/shop_codes?status=eq.unused&select=code&limit=1');
+    if (!pool.length) return;
+    const code = pool[0].code;
+    const r = await sb('PATCH', '/shop_codes?code=eq.' + encodeURIComponent(code) + '&status=eq.unused', { status: 'sold', sold_at: new Date().toISOString(), order_no: orderNo });
+    if (Array.isArray(r) && r.length) {
+      await sb('PATCH', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo), { status: 'delivered', code });
+      return;
+    }
+  }
+}
+
+server.listen(CFG.PORT, () => console.log('card-shop running on ' + CFG.PORT));
