@@ -209,7 +209,7 @@ const server = http.createServer(async (req, res) => {
       }
       return res.end(page('微信扫码付款', `
           <h1>微信扫码付款</h1>
-          <div class="small">订单号：${esc(o.order_no)}</div>
+          <div class="small">订单号：${esc(o.order_no)} <a href="javascript:void(0)" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='📋 已复制'" style="color:#2e9e5b;font-weight:700">📋 复制订单号（联系客服要用）</a></div>
           <div style="background:#fff4f4;border:2px dashed #d64545;border-radius:14px;padding:14px;text-align:center;margin:10px 0">
             <div style="font-size:13px;color:#d64545;font-weight:700">⚠️ 必须按下面金额精确支付，一分都不能差！</div>
             <div style="font-size:44px;font-weight:900;color:#d64545;line-height:1.2;margin:4px 0">¥${esc(o.amount).slice(0, -3)}<span style="font-size:52px;text-decoration:underline">${esc(o.amount).slice(-3, -1)}<span style="background:#ffe08a;padding:0 4px;border-radius:6px">${esc(o.amount).slice(-2)}</span></span></div>
@@ -413,6 +413,38 @@ const server = http.createServer(async (req, res) => {
           document.getElementById('payout').textContent=j.ok?('✅ 已发码：'+j.code+'（客户刷新订单页即可看到）'):('❌ '+j.error);
         }
         </script>
+        <h1 style="font-size:15px;text-align:left;margin-top:16px">🔍 订单查询（最近 15 笔，一键补发）</h1>
+        <div class="small">客户说付了钱没收到码？在这里找到他的订单（按金额/时间认），点「补发」——客户订单页立刻出码</div>
+        <button class="btn" style="background:#888;margin-top:8px" onclick="orders()">🔄 刷新订单列表</button>
+        <div id="ordout" class="small"></div>
+        <script>
+        async function orders(){
+          const k=document.getElementById('k').value.trim();
+          if(!k){alert('先填密钥');return;}
+          document.getElementById('ordout').textContent='加载中…';
+          const r=await fetch('/admin/orders?key='+encodeURIComponent(k));
+          const j=await r.json();
+          if(!j.ok){document.getElementById('ordout').textContent='❌ '+j.error;return;}
+          if(!j.orders.length){document.getElementById('ordout').textContent='还没有订单';return;}
+          const st={'pending':'⏳待支付','paid':'✅已付待发码','delivered':'🎉已发码'};
+          document.getElementById('ordout').innerHTML=j.orders.map(o=>
+            '<div style="border:1px solid #eee;border-radius:8px;padding:8px;margin-top:6px;font-size:12px;line-height:1.7">'
+            +'<b>'+(o.order_no.slice(0,10))+'…'+(o.order_no.slice(-4))+'</b> · ¥'+o.amount+' · '+st[o.status||'pending']
+            +(o.code?(' · 码 '+o.code.slice(0,14)+'…'):'')
+            +'<br/><span style="color:#999">'+new Date(o.created_at).toLocaleString('zh-CN',{hour12:false})+'</span> '
+            +'<a href="javascript:void(0)" onclick="navigator.clipboard.writeText(\''+o.order_no+'\');this.textContent=\'✓已复制单号\'" style="color:#2e9e5b">📋复制单号</a>'
+            +(o.status!=='delivered'?(' <a href="javascript:void(0)" onclick="deliver(\''+o.order_no+'\')" style="color:#d64545;font-weight:700">💸确认收款·补发码</a>'):(''))
+            +'</div>').join('');
+        }
+        async function deliver(no){
+          if(!confirm('确认已收到 '+no+' 的付款？点确定立即发码'))return;
+          const k=document.getElementById('k').value.trim();
+          const r=await fetch('/admin/markpaid?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_no:no})});
+          const j=await r.json();
+          alert(j.ok?('✅ 已补发，客户订单页刷新即可看到激活码'):('❌ '+j.error));
+          orders();
+        }
+        </script>
         <h1 style="font-size:15px;text-align:left;margin-top:16px">📡 监听状态（V免签）</h1>
         <button class="btn" style="background:#888" onclick="vmqst()">检查监听App是否在线</button>
         <div id="vmqout" class="small"></div>
@@ -487,6 +519,12 @@ const server = http.createServer(async (req, res) => {
       const orders = await sb('GET', '/shop_orders?select=order_no');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, unused: unused.length, sold: sold.length, orders: orders.length }));
+    }
+    if (p === '/admin/orders') {
+      if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
+      const rows = await sb('GET', '/shop_orders?select=order_no,status,amount,code,created_at&order=created_at.desc&limit=15');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, orders: rows }));
     }
 
     res.writeHead(404, { 'Content-Type': 'text/plain' });
