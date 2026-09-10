@@ -193,7 +193,7 @@ const server = http.createServer(async (req, res) => {
           <div id="st" class="small">⏳ 等待支付中…（付款后不用刷新，本页会自动监测）</div>
           <div id="cd" class="small" style="color:#c2554f;font-weight:700"></div>
           <div id="code"></div>
-          <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="manualCheck()">✅ 我已付款 · 立即查询结果</button>
+          <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="openQModal()">✅ 我已付款 · 查询结果</button>
           <div id="help" style="display:none;background:#fff8e6;border:1px solid #e8b93c;border-radius:10px;padding:10px;margin-top:12px;font-size:12.5px;line-height:1.8">
             😓 <b>超过 1 分钟还没监测到付款？</b><br/>
             最常见原因：<b>金额没按红色数字付</b>（差一分钱都识别不了）。<br/>
@@ -210,6 +210,12 @@ const server = http.createServer(async (req, res) => {
               <div class="code-box" id="ovcode" onclick="navigator.clipboard.writeText(this.textContent.trim());this.textContent='已复制 ✓';setTimeout(()=>{this.textContent=CODE_SAVED},900)" style="cursor:pointer"></div>
               <div class="small">👆 点击复制激活码</div>
               <button class="btn" style="margin-top:12px" onclick="this.parentElement.parentElement.style.display='none'">知道了</button>
+            </div>
+          </div>
+          <div id="qmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+            <div style="background:#fff;border-radius:16px;padding:24px 20px;max-width:330px;width:88%;text-align:center">
+              <div id="qbody"><div style="font-size:34px">🔍</div><div style="font-size:15px;font-weight:800;margin:8px 0">正在查询支付结果…</div><div class="small">最多需要 5 秒</div></div>
+              <button class="btn" style="background:#999;margin-top:14px" onclick="document.getElementById('qmodal').style.display='none'">关闭</button>
             </div>
           </div>
           <script>
@@ -256,6 +262,20 @@ const server = http.createServer(async (req, res) => {
             document.getElementById('st').innerHTML='⏳ 正在向后台核实支付结果，请等 3-10 秒…';
             const done=await poll(true);
             if(!done) setTimeout(poll,2500);
+          }
+          /* 查询结果弹窗：点按钮弹出 → 转圈查询 → 弹出结果（有码弹成功框，无码弹原因说明）。
+             纯只读操作：不付款点多少次都不会发码，发码唯一触发是手机推来的真实到账通知 */
+          async function openQModal(){
+            const m=document.getElementById('qmodal'); m.style.display='flex';
+            const q=document.getElementById('qbody');
+            q.innerHTML='<div style="font-size:34px">🔍</div><div style="font-size:15px;font-weight:800;margin:8px 0">正在查询支付结果…</div><div class="small">最多需要 5 秒</div>';
+            const ids=[...new Set([lastOrder(), OWN].filter(Boolean))];
+            let found='';
+            for(const id of ids){
+              try{ const r=await fetch('/order/status?id='+id); const j=await r.json(); if(j.status==='delivered'&&j.code){ found=j.code; break; } }catch(e){}
+            }
+            if(found){ m.style.display='none'; showCode(found); return; }
+            q.innerHTML='<div style="font-size:34px">⏳</div><div style="font-size:15px;font-weight:800;margin:8px 0">暂未查到付款记录</div><div class="small" style="text-align:left;line-height:1.9">· 刚付完款请等 5 秒，点下面「再查一次」<br/>· 付款金额必须精确等于 <b>¥${esc(o.amount)}</b><br/>· 若付款金额不是本页金额，请回到付款那张页面查询<br/>· 不行就加微信 <b>${CFG.WECHAT}</b> 报订单号 <b>${esc(o.order_no)}</b> 人工补发</div><button class="btn" style="background:#2e9e5b;margin-top:10px" onclick="openQModal()">🔄 再查一次</button>';
           }
           /* 从微信切回本页时自动立即核查一次 */
           document.addEventListener('visibilitychange',()=>{ if(!document.hidden) manualCheck(); });
