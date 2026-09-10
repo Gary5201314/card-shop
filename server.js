@@ -178,10 +178,14 @@ const server = http.createServer(async (req, res) => {
          单人购买永远 = 基准价 9.90；只有多人同时付款才 +0.01 区分（V免签到账通知里只有金额可辨认） */
       let amount = CFG.PRICE;
       if (vmqReady()) {
-        const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
+        /* 15 分钟前的老挂单作废（V免签匹配窗口只有10分钟，超窗必然匹配不上，留着只会占金额号位） */
+        const expireSince = new Date(Date.now() - 15 * 60000).toISOString();
+        try { await sb('PATCH', '/shop_orders?status=eq.pending&created_at=lt.' + expireSince, { status: 'expired' }); } catch (e) {}
+        /* 金额与所有 pending 订单查重（不限时间窗）：保证"金额↔订单"一一对应，
+           客户在哪个页面付款，码就发到哪个页面，绝不串单 */
         for (let i = 0; i < 60; i++) {
           amount = (parseFloat(CFG.PRICE) + i * 0.01).toFixed(2);
-          const dup = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + amount + '&created_at=gte.' + since + '&select=order_no&limit=1');
+          const dup = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + amount + '&select=order_no&limit=1');
           if (!dup.length) break;
         }
       }
@@ -252,6 +256,7 @@ const server = http.createServer(async (req, res) => {
                 const ov=document.getElementById('overlay'); ov.style.display='flex';
                 return true;
               }
+              if(j.status==='expired'){document.getElementById('st').innerHTML='⌛ 订单已超时（15分钟未支付），请返回重新购买，付款前看清页面金额';CODE_SAVED='EXPIRED';return true;}
               if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
             }catch(e){}
             CHECKS++;
