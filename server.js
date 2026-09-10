@@ -278,24 +278,6 @@ const server = http.createServer(async (req, res) => {
           <\/script>`));
     }
 
-    /* 虎皮椒回调（验签 → 标记已付 → 发码） */
-    if (p === '/pay/notify' && req.method === 'POST') {
-      let body = '';
-      req.on('data', c => body += c);
-      req.on('end', async () => {
-        try {
-          const params = {};
-          body.split('&').forEach(kv => { const [k, v] = kv.split('='); params[decodeURIComponent(k)] = decodeURIComponent((v || '').replace(/\+/g, ' ')); });
-          const expect = xunhuSign(params, CFG.XUNHU_SECRET);
-          if (params.hash !== expect) return res.end('fail hash');
-          if (params.status !== 'OD') return res.end('not complete');
-          await markPaid(params.trade_order_id);
-          res.end('success');
-        } catch (e) { res.end('fail: ' + e.message); }
-      });
-      return;
-    }
-
     /* 订单状态页（付款回跳 / 手动查询） */
     /* ====== V免签协议端点（安卓监控App对接，协议同 szvone/vmqphp） ====== */
     if (p === '/appHeart') {
