@@ -163,6 +163,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     /* 创建订单 → 跳支付（未配支付则提示） */
+    /* 收款码图片（仓库内托管，浏览器同源加载稳定） */
+    if (p === '/qr_wechat.jpg') {
+      const fs = require('fs');
+      const path = require('path');
+      const img = fs.readFileSync(path.join(__dirname, 'qr_wechat.jpg'));
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache' });
+      return res.end(img);
+    }
+
     if (p === '/buy') {
       const orderNo = 'TLB' + Date.now() + Math.floor(Math.random() * 900 + 100);
       /* V免签模式：分配唯一支付金额（基准价起每次 +0.01，避开近 N 分钟 pending 订单占用的金额） */
