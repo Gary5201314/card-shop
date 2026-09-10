@@ -242,6 +242,22 @@ const server = http.createServer(async (req, res) => {
         <textarea id="codes" placeholder="TLB-M-XXXXXX-...&#10;TLB-M-XXXXXX-..."></textarea>
         <button class="btn" style="margin-top:10px" onclick="imp()">导入库存</button>
         <div id="out" class="small"></div>
+        <h1 style="font-size:15px;text-align:left;margin-top:16px">💸 确认收款（手动发码）</h1>
+        <div class="small">客户微信付款后，填他的订单号点一下 → 客户的订单页立刻自动显示激活码，无需你发微信</div>
+        <input id="payno" placeholder="TLB1757…订单号"/>
+        <button class="btn" style="background:#2e9e5b;margin-top:8px" onclick="mkpaid()">✅ 已收款 · 立即发码</button>
+        <div id="payout" class="small"></div>
+        <script>
+        async function mkpaid(){
+          const k=document.getElementById('k').value.trim();
+          const no=document.getElementById('payno').value.trim();
+          if(!k){alert('先填管理员密钥');return;}
+          if(!no){alert('填客户的订单号');return;}
+          const r=await fetch('/admin/markpaid?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_no:no})});
+          const j=await r.json();
+          document.getElementById('payout').textContent=j.ok?('✅ 已发码：'+j.code+'（客户刷新订单页即可看到）'):('❌ '+j.error);
+        }
+        </script>
         <h1 style="font-size:15px;text-align:left;margin-top:16px">📊 查看库存</h1>
         <button class="btn" style="background:#888" onclick="stat()">刷新统计</button>
         <div id="st2" class="small"></div>
@@ -262,6 +278,27 @@ const server = http.createServer(async (req, res) => {
         }
         <\/script>`));
     }
+    if (p === '/admin/markpaid' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', async () => {
+        if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
+        const j = JSON.parse(body || '{}');
+        const no = String(j.order_no || '').trim();
+        if (!no) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"error":"缺少订单号"}'); }
+        const rows = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(no) + '&select=*');
+        if (!rows.length) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"error":"订单不存在"}'); }
+        if (rows[0].status === 'delivered') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, code: rows[0].code, msg: '该订单早已发码' })); }
+        await markPaid(no);
+        await deliverCode(no);
+        const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(no) + '&select=*');
+        const code = (rows2[0] || {}).code || null;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(code ? JSON.stringify({ ok: true, code }) : JSON.stringify({ error: '库存不足：先去导入激活码' }));
+      });
+      return;
+    }
+
     if (p === '/admin/import' && req.method === 'POST') {
       let body = '';
       req.on('data', c => body += c);
