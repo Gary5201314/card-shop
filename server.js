@@ -1,6 +1,6 @@
 /* ============================================================
    甜老板发卡站 · 单文件 Node 服务（零依赖，Render 免费版直跑）
-   流程：买卡页 → 虎皮椒微信支付 → 回调验签 → 自动发卡密
+   流程：买卡页 → 扫微信收款码付款（V免签监听到账） → 自动发卡密
    存储：Supabase（表 shop_codes / shop_orders）
    ============================================================ */
 const http = require('http');
@@ -12,8 +12,6 @@ const CFG = {
   PORT: process.env.PORT || 3000,
   SUPABASE_URL: (process.env.SUPABASE_URL || 'https://cgccdaqihdwelpqpjekn.supabase.co').replace(/\/+$/, ''),
   SUPABASE_KEY: process.env.SUPABASE_ANON_KEY || ['sb_publish','able_6jPyDwZG9MPjtDltQPbtBQ_umpA4d7r'].join(''),
-  XUNHU_APPID: process.env.XUNHU_APPID || '',
-  XUNHU_SECRET: process.env.XUNHU_SECRET || '',
   VMQ_KEY: process.env.VMQ_KEY || '',            /* V免签监听密钥（安卓监控App配置用） */
   WECHAT_QR_URL: process.env.WECHAT_QR_URL || '',/* 微信收款码图片地址（配置后开启扫码自动发码） */
   VMQ_MINUTES: parseInt(process.env.VMQ_MINUTES || '10', 10), /* 订单金额占用时长（分钟） */
@@ -23,7 +21,6 @@ const CFG = {
   WECHAT: 'vipcake996',
   BASE_URL: process.env.BASE_URL || ''  // 站点自身地址（回调拼链接用），Render 上填 https://xxx.onrender.com
 };
-const payReady = () => CFG.XUNHU_APPID && CFG.XUNHU_SECRET;
 const vmqReady = () => CFG.VMQ_KEY && CFG.WECHAT_QR_URL;
 
 /* ---------- 小工具 ---------- */
@@ -53,51 +50,6 @@ function sb(method, path, body) {
   });
 }
 const md5 = s => crypto.createHash('md5').update(s, 'utf8').digest('hex');
-const nonce = () => crypto.randomBytes(16).toString('hex');
-function xunhuSign(params, secret) {
-  const ks = Object.keys(params).filter(k => k !== 'hash' && params[k] !== '' && params[k] != null).sort();
-  let str = '';
-  ks.forEach(k => { str += k + '=' + params[k] + '&'; });
-  return md5(str + 'key=' + secret);
-}
-function xunhuPay(orderNo, ip) {
-  return new Promise((resolve, reject) => {
-    const base = CFG.BASE_URL || ('https://' + (process.env.RENDER_EXTERNAL_HOSTNAME || '')); 
-    const p = {
-      version: '1.1', lang: 'zh-cn', plugins: 'weixin',
-      appid: CFG.XUNHU_APPID,
-      trade_order_id: orderNo,
-      total_fee: CFG.PRICE,
-      title: CFG.TITLE,
-      time: Math.floor(Date.now() / 1000),
-      notify_url: base + '/pay/notify',
-      return_url: base + '/order?id=' + orderNo,
-      nonce_str: nonce(),
-      type: 'WAP',
-      wap_url: base,
-      wap_name: '甜老板发卡'
-    };
-    p.hash = xunhuSign(p, CFG.XUNHU_SECRET);
-    const data = Object.keys(p).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(p[k])).join('&');
-    const req = https.request(new URL('https://pay.xunhupay.com/payment/api.html?mod=pay'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    }, res => {
-      let buf = '';
-      res.on('data', c => buf += c);
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(buf);
-          if (j.errcode === 0 && j.url) resolve(j.url);
-          else reject(new Error('xunhu: ' + (j.errmsg || buf.slice(0, 200))));
-        } catch (e) { reject(new Error('xunhu resp: ' + buf.slice(0, 200))); }
-      });
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
-}
 function page(title, bodyHtml) {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
@@ -142,9 +94,9 @@ const server = http.createServer(async (req, res) => {
   try {
     /* 买卡首页 */
     if (p === '/' ) {
-      const payTip = payReady()
-        ? '<div class="tip">支付由虎皮椒提供 · 付款成功激活码<b>自动发送</b></div>'
-        : `<div class="tip">⚠️ 支付通道配置中，暂请加微信 <b>${CFG.WECHAT}</b> 购买<br/>（管理员配置虎皮椒后此提示自动消失）</div>`;
+      const payTip = vmqReady()
+        ? '<div class="tip">扫码微信支付 · 付款成功激活码<b>自动发送</b></div>'
+        : `<div class="tip">⚠️ 支付通道配置中，暂请加微信 <b>${CFG.WECHAT}</b> 购买</div>`;
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(page(CFG.TITLE, `
         <div class="logo">🍰</div>
