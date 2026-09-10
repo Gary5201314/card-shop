@@ -210,12 +210,25 @@ const server = http.createServer(async (req, res) => {
       return res.end(page('微信扫码付款', `
           <h1>微信扫码付款</h1>
           <div class="small">订单号：${esc(o.order_no)}</div>
-          <div class="price"><b>¥${esc(o.amount)}</b><br/><i>⚠️ 必须按上面金额精确支付（多一分少一分都无法自动确认）</i></div>
+          <div style="background:#fff4f4;border:2px dashed #d64545;border-radius:14px;padding:14px;text-align:center;margin:10px 0">
+            <div style="font-size:13px;color:#d64545;font-weight:700">⚠️ 必须按下面金额精确支付，一分都不能差！</div>
+            <div style="font-size:44px;font-weight:900;color:#d64545;line-height:1.2;margin:4px 0">¥${esc(o.amount).slice(0, -3)}<span style="font-size:52px;text-decoration:underline">${esc(o.amount).slice(-3, -1)}<span style="background:#ffe08a;padding:0 4px;border-radius:6px">${esc(o.amount).slice(-2)}</span></span></div>
+            <div style="font-size:12px;color:#8a817a">红色圈住的 <b>${esc(o.amount).slice(-2)}</b> 是小数位，很多人漏掉这一步导致发码失败</div>
+            <button class="btn" style="background:#d64545;margin-top:8px" onclick="navigator.clipboard.writeText('${esc(o.amount)}').then(()=>{this.textContent='✓ 已复制金额 '+ '${esc(o.amount)}';setTimeout(()=>{this.textContent='📋 一键复制金额'},1200)})">📋 一键复制金额</button>
+          </div>
           <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
-          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后本页自动跳出激活码，无需加微信</div>
+          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 长按粘贴或输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后回到本页，自动弹出激活码</div>
           <div id="st" class="small">⏳ 等待支付中…（付款后不用刷新，本页会自动监测）</div>
           <div id="code"></div>
           <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="manualCheck()">✅ 我已付款 · 立即查询结果</button>
+          <div id="help" style="display:none;background:#fff8e6;border:1px solid #e8b93c;border-radius:10px;padding:10px;margin-top:12px;font-size:12.5px;line-height:1.8">
+            😓 <b>超过 1 分钟还没监测到付款？</b><br/>
+            最常见原因：<b>金额没按红色数字付</b>（差一分钱都识别不了）。<br/>
+            ① 回忆一下是否按 <b>¥${esc(o.amount)}</b> 付款；付错了没关系，钱不会丢<br/>
+            ② 加微信 <b style="font-size:15px">${CFG.WECHAT}</b>，把订单号发给他人工补发：<b>${esc(o.order_no)}</b>（点击复制）<br/>
+            <button class="btn" style="background:#888;margin-top:6px" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='✓ 订单号已复制'">📋 复制订单号</button>
+          </div>
+          <div class="tip">任何问题加微信 <b>${CFG.WECHAT}</b> 秒回复（发货·退款·开票都可以）</div>
           <div class="tip">拿到激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
           <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99;align-items:center;justify-content:center">
             <div style="background:#fff;border-radius:16px;padding:24px 20px;max-width:320px;width:86%;text-align:center">
@@ -255,6 +268,8 @@ const server = http.createServer(async (req, res) => {
           }
           /* 从微信切回本页时自动立即核查一次 */
           document.addEventListener('visibilitychange',()=>{ if(!document.hidden) manualCheck(); });
+          /* 60 秒还没结果 → 弹出醒目求助框（付错金额自助补救） */
+          setTimeout(()=>{ const h=document.getElementById('help'); if(h&&!CODE_SAVED) h.style.display='block'; },60000);
           poll(false); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
           <\/script>`));
     }
@@ -296,7 +311,13 @@ const server = http.createServer(async (req, res) => {
       if (!CFG.VMQ_KEY || md5(type + price + t + CFG.VMQ_KEY) !== sign) return res.end('{"code":-1,"msg":"签名校验不通过"}');
       /* 按金额匹配近 N 分钟内最早的 pending 订单 → 标记已付 → 自动发码 */
       const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
-      const rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
+      let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
+      /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。若窗口内只有 1 笔待付订单，那必然是他的 → 直接匹配，
+         避免"付了钱但差一分钱发不出码"的死局；多笔并发时不猜，交人工 */
+      if (!rows.length) {
+        const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no&order=created_at.asc');
+        if (all.length === 1) rows = all;
+      }
       if (rows.length) {
         await markPaid(rows[0].order_no);
         await deliverCode(rows[0].order_no);
