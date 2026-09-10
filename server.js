@@ -16,7 +16,7 @@ const CFG = {
   XUNHU_SECRET: process.env.XUNHU_SECRET || '',
   VMQ_KEY: process.env.VMQ_KEY || '',            /* V免签监听密钥（安卓监控App配置用） */
   WECHAT_QR_URL: process.env.WECHAT_QR_URL || '',/* 微信收款码图片地址（配置后开启扫码自动发码） */
-  VMQ_MINUTES: parseInt(process.env.VMQ_MINUTES || '20', 10), /* 订单金额占用时长（分钟） */
+  VMQ_MINUTES: parseInt(process.env.VMQ_MINUTES || '10', 10), /* 订单金额占用时长（分钟） */
   ADMIN_KEY: process.env.ADMIN_KEY || 'tlb-admin-2026',
   PRICE: process.env.PRICE || '9.90',
   TITLE: '甜老板私域助手 · 永久买断激活码',
@@ -174,7 +174,8 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/buy') {
       const orderNo = 'TLB' + Date.now() + Math.floor(Math.random() * 900 + 100);
-      /* V免签模式：分配唯一支付金额（基准价起每次 +0.01，避开近 N 分钟 pending 订单占用的金额） */
+      /* V免签模式：分配唯一支付金额（基准价起每次 +0.01，避开近 N 分钟 pending 订单占用的金额）。
+         单人购买永远 = 基准价 9.90；只有多人同时付款才 +0.01 区分（V免签到账通知里只有金额可辨认） */
       let amount = CFG.PRICE;
       if (vmqReady()) {
         const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
@@ -185,21 +186,40 @@ const server = http.createServer(async (req, res) => {
         }
       }
       await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount });
-      if (vmqReady()) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(page('微信扫码付款', `
+      /* 302 跳转到订单专属页：之后刷新/回退都不会再新建订单 */
+      res.writeHead(302, { Location: '/pay/' + orderNo });
+      return res.end();
+    }
+
+    /* 订单支付页（刷新安全：按订单号读库渲染，不新建订单） */
+    if (p.startsWith('/pay/TLB')) {
+      const orderNo = p.slice(5);
+      const ors = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=order_no,status,amount,code&limit=1');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      if (!ors.length) {
+        return res.end(page('订单不存在', `<h1>订单不存在</h1><div class="tip">请回到购买页重新下单，或加微信 <b>${CFG.WECHAT}</b> 咨询</div>`));
+      }
+      const o = ors[0];
+      if (o.status === 'delivered' && o.code) {
+        return res.end(page('购买成功', `
+          <h1>✅ 支付成功</h1>
+          <div class="small">订单号：${esc(o.order_no)}</div>
+          <div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert('已复制')">${esc(o.code)}</div>
+          <div class="tip">👆 点击复制激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>`));
+      }
+      return res.end(page('微信扫码付款', `
           <h1>微信扫码付款</h1>
-          <div class="small">订单号：${orderNo}</div>
-          <div class="price"><b>¥${amount}</b><br/><i>⚠️ 必须按上面金额精确支付（多一分少一分都无法自动确认）</i></div>
+          <div class="small">订单号：${esc(o.order_no)}</div>
+          <div class="price"><b>¥${esc(o.amount)}</b><br/><i>⚠️ 必须按上面金额精确支付（多一分少一分都无法自动确认）</i></div>
           <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
-          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 输入金额 <b>¥${amount}</b> → 付款<br/>③ 付款成功后本页自动跳出激活码，无需加微信</div>
-          <div id="st" class="small">⏳ 等待支付中…</div>
+          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后本页自动跳出激活码，无需加微信</div>
+          <div id="st" class="small">⏳ 等待支付中…（本页每 2.5 秒自动查询支付结果，不需要刷新）</div>
           <div id="code"></div>
           <div class="tip">拿到激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
           <script>
           async function poll(){
             try{
-              const r=await fetch('/order/status?id=${orderNo}');
+              const r=await fetch('/order/status?id=${esc(o.order_no)}');
               const j=await r.json();
               if(j.status==='delivered'&&j.code){
                 document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
@@ -212,23 +232,6 @@ const server = http.createServer(async (req, res) => {
           }
           poll();
           <\/script>`));
-      }
-      if (!payReady()) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(page('订单已创建', `
-          <h1>订单已创建</h1>
-          <div class="small">订单号：${orderNo}</div>
-          <div class="feat">支付通道正在配置，请加微信 <b>${CFG.WECHAT}</b> 完成付款，付款后激活码自动发送到本页面。</div>
-          <a class="btn" style="display:block;text-align:center;text-decoration:none" href="/order?id=${orderNo}">我已付款 · 查看激活码</a>`));
-      }
-      try {
-        const url = await xunhuPay(orderNo);
-        res.writeHead(302, { Location: url });
-        return res.end();
-      } catch (e) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(page('支付暂不可用', `<h1>支付暂不可用</h1><div class="small">${esc(e.message)}</div><div class="tip">请加微信 <b>${CFG.WECHAT}</b> 购买，或稍后再试</div>`));
-      }
     }
 
     /* 虎皮椒回调（验签 → 标记已付 → 发码） */
