@@ -14,6 +14,9 @@ const CFG = {
   SUPABASE_KEY: process.env.SUPABASE_ANON_KEY || ['sb_publish','able_6jPyDwZG9MPjtDltQPbtBQ_umpA4d7r'].join(''),
   XUNHU_APPID: process.env.XUNHU_APPID || '',
   XUNHU_SECRET: process.env.XUNHU_SECRET || '',
+  VMQ_KEY: process.env.VMQ_KEY || '',            /* V免签监听密钥（安卓监控App配置用） */
+  WECHAT_QR_URL: process.env.WECHAT_QR_URL || '',/* 微信收款码图片地址（配置后开启扫码自动发码） */
+  VMQ_MINUTES: parseInt(process.env.VMQ_MINUTES || '20', 10), /* 订单金额占用时长（分钟） */
   ADMIN_KEY: process.env.ADMIN_KEY || 'tlb-admin-2026',
   PRICE: process.env.PRICE || '9.90',
   TITLE: '甜老板私域助手 · 永久买断激活码',
@@ -21,6 +24,7 @@ const CFG = {
   BASE_URL: process.env.BASE_URL || ''  // 站点自身地址（回调拼链接用），Render 上填 https://xxx.onrender.com
 };
 const payReady = () => CFG.XUNHU_APPID && CFG.XUNHU_SECRET;
+const vmqReady = () => CFG.VMQ_KEY && CFG.WECHAT_QR_URL;
 
 /* ---------- 小工具 ---------- */
 function sb(method, path, body) {
@@ -122,6 +126,15 @@ a{color:#a9763f}
 }
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/* V免签心跳/最后到账时间持久化（借 shop_codes 系统行：code=__vmq_heart / __vmq_lastpay，status=system 不计入库存） */
+async function vmqMark(kind) {
+  const now = new Date().toISOString();
+  const r = await sb('PATCH', '/shop_codes?code=eq.__vmq_' + kind, { sold_at: now });
+  if (!Array.isArray(r) || !r.length) {
+    try { await sb('POST', '/shop_codes', { code: '__vmq_' + kind, status: 'system', sold_at: now }); } catch (e) {}
+  }
+}
+
 /* ---------- 路由 ---------- */
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -152,7 +165,45 @@ const server = http.createServer(async (req, res) => {
     /* 创建订单 → 跳支付（未配支付则提示） */
     if (p === '/buy') {
       const orderNo = 'TLB' + Date.now() + Math.floor(Math.random() * 900 + 100);
-      await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount: CFG.PRICE });
+      /* V免签模式：分配唯一支付金额（基准价起每次 +0.01，避开近 N 分钟 pending 订单占用的金额） */
+      let amount = CFG.PRICE;
+      if (vmqReady()) {
+        const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
+        for (let i = 0; i < 60; i++) {
+          amount = (parseFloat(CFG.PRICE) + i * 0.01).toFixed(2);
+          const dup = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + amount + '&created_at=gte.' + since + '&select=order_no&limit=1');
+          if (!dup.length) break;
+        }
+      }
+      await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount });
+      if (vmqReady()) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(page('微信扫码付款', `
+          <h1>微信扫码付款</h1>
+          <div class="small">订单号：${orderNo}</div>
+          <div class="price"><b>¥${amount}</b><br/><i>⚠️ 必须按上面金额精确支付（多一分少一分都无法自动确认）</i></div>
+          <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
+          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 输入金额 <b>¥${amount}</b> → 付款<br/>③ 付款成功后本页自动跳出激活码，无需加微信</div>
+          <div id="st" class="small">⏳ 等待支付中…</div>
+          <div id="code"></div>
+          <div class="tip">拿到激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
+          <script>
+          async function poll(){
+            try{
+              const r=await fetch('/order/status?id=${orderNo}');
+              const j=await r.json();
+              if(j.status==='delivered'&&j.code){
+                document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
+                document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+j.code+'</div><div class="tip">👆 点击复制激活码</div>';
+                return;
+              }
+              if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';}
+            }catch(e){}
+            setTimeout(poll,2500);
+          }
+          poll();
+          <\/script>`));
+      }
       if (!payReady()) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(page('订单已创建', `
@@ -190,6 +241,45 @@ const server = http.createServer(async (req, res) => {
     }
 
     /* 订单状态页（付款回跳 / 手动查询） */
+    /* ====== V免签协议端点（安卓监控App对接，协议同 szvone/vmqphp） ====== */
+    if (p === '/appHeart') {
+      const t = u.searchParams.get('t') || '';
+      const sign = u.searchParams.get('sign') || '';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (!CFG.VMQ_KEY || md5(t + CFG.VMQ_KEY) !== sign) return res.end('{"code":-1,"msg":"签名校验不通过"}');
+      vmqMark('heart');
+      return res.end('{"code":1,"msg":"成功"}');
+    }
+    if (p === '/appPush') {
+      const t = u.searchParams.get('t') || '';
+      const type = u.searchParams.get('type') || '';
+      const price = (u.searchParams.get('price') || '').replace(/[^0-9.]/g, '');
+      const sign = u.searchParams.get('sign') || '';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (!CFG.VMQ_KEY || md5(type + price + t + CFG.VMQ_KEY) !== sign) return res.end('{"code":-1,"msg":"签名校验不通过"}');
+      /* 按金额匹配近 N 分钟内最早的 pending 订单 → 标记已付 → 自动发码 */
+      const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
+      const rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
+      if (rows.length) {
+        await markPaid(rows[0].order_no);
+        await deliverCode(rows[0].order_no);
+      }
+      vmqMark('lastpay');
+      return res.end('{"code":1,"msg":"成功"}');
+    }
+
+    if (p === '/admin/vmqstat') {
+      if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end('{"error":"密钥错误"}'); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (!CFG.VMQ_KEY) return res.end('{"ok":true,"online":false,"msg":"未配置VMQ_KEY"}');
+      const rows = await sb('GET', '/shop_codes?code=in.(__vmq_heart,__vmq_lastpay)&select=code,sold_at');
+      const heart = rows.find(r => r.code === '__vmq_heart');
+      const lastpay = rows.find(r => r.code === '__vmq_lastpay');
+      const online = !!(heart && heart.sold_at && (Date.now() - new Date(heart.sold_at).getTime() < 3 * 60000));
+      const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '无记录';
+      return res.end(JSON.stringify({ ok: true, online, lastheart: fmt(heart && heart.sold_at), lastpay: fmt(lastpay && lastpay.sold_at) }));
+    }
+
     if (p === '/order') {
       const id = u.searchParams.get('id') || '';
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -229,7 +319,7 @@ const server = http.createServer(async (req, res) => {
       const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
       const o2 = rows2[0] || o;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: o2.status, code: o2.code || null }));
+      return res.end(JSON.stringify({ status: o2.status, code: o2.code || null, amount: o2.amount || null }));
     }
 
     /* 管理后台 */
@@ -256,6 +346,18 @@ const server = http.createServer(async (req, res) => {
           const r=await fetch('/admin/markpaid?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_no:no})});
           const j=await r.json();
           document.getElementById('payout').textContent=j.ok?('✅ 已发码：'+j.code+'（客户刷新订单页即可看到）'):('❌ '+j.error);
+        }
+        </script>
+        <h1 style="font-size:15px;text-align:left;margin-top:16px">📡 监听状态（V免签）</h1>
+        <button class="btn" style="background:#888" onclick="vmqst()">检查监听App是否在线</button>
+        <div id="vmqout" class="small"></div>
+        <script>
+        async function vmqst(){
+          const k=document.getElementById('k').value.trim();
+          if(!k){alert('先填密钥');return;}
+          const r=await fetch('/admin/vmqstat?key='+encodeURIComponent(k));
+          const j=await r.json();
+          document.getElementById('vmqout').textContent=j.ok?(j.online?('🟢 监听App在线（最后心跳 '+j.lastheart+'，最后到账 '+j.lastpay+'）'):('🔴 监听App离线！检查手机是否开机、V免签App是否在运行')):('❌ '+j.error);
         }
         </script>
         <h1 style="font-size:15px;text-align:left;margin-top:16px">📊 查看库存</h1>
