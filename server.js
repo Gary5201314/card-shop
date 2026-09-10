@@ -75,7 +75,7 @@ input{width:100%;border:1.5px solid #e6d5bd;border-radius:10px;padding:10px;font
 .small{font-size:12px;color:#9a7b55;line-height:1.8;margin:8px 0}
 a{color:#a9763f}
 .ver{text-align:center;font-size:10px;color:#cdbba4;margin-top:14px}
-</style></head><body><div class="card">${bodyHtml}<div class="ver">页面版本 V2004 · 看不到这行说明是旧缓存页</div></div></body></html>`;
+</style></head><body><div class="card">${bodyHtml}<div class="ver">页面版本 V2005 · 看不到这行说明是旧缓存页</div></div></body></html>`;
 }
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -182,28 +182,24 @@ const server = http.createServer(async (req, res) => {
           <div class="tip">👆 点击复制激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>`));
       }
       return res.end(page('微信扫码付款', `
-          <h1>微信扫码付款</h1>
+          <h1>扫码付款</h1>
           <div class="small">订单号：${esc(o.order_no)} <a href="javascript:void(0)" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='已复制 ✓'" style="color:#2e9e5b;font-weight:700">📋 复制</a></div>
-          <div style="background:#fff4f4;border:2px dashed #d64545;border-radius:14px;padding:14px;text-align:center;margin:10px 0">
-            <div style="font-size:13px;color:#d64545;font-weight:700">⚠️ 必须按下面金额精确支付，一分都不能差！</div>
-            <div style="font-size:48px;font-weight:900;color:#d64545;line-height:1.25;margin:4px 0;letter-spacing:1px">¥${esc(o.amount).split('.')[0]}<span style="background:#ffe08a;padding:0 6px;border-radius:8px">.${esc(o.amount).split('.')[1] || '00'}</span></div>
-            <div style="font-size:12px;color:#8a817a">黄色部分 <b>.${esc(o.amount).split('.')[1] || '00'}</b> 也要输对（用于自动识别你的订单）</div>
+          <div style="background:linear-gradient(135deg,#fff5f5,#fffaf0);border:2px solid #f0c9c9;border-radius:16px;padding:14px 12px;text-align:center;margin:10px 0;box-shadow:0 4px 14px rgba(214,69,69,.08)">
+            <div style="font-size:13px;color:#d64545;font-weight:800">请精确支付 <span style="background:#ffe08a;padding:1px 8px;border-radius:8px">¥${esc(o.amount)}</span>（多一分少一分都无法识别）</div>
+            <div style="font-size:40px;font-weight:900;color:#d64545;line-height:1.3;letter-spacing:1px">¥${esc(o.amount).split('.')[0]}<span style="background:#ffe08a;padding:0 6px;border-radius:8px">.${esc(o.amount).split('.')[1] || '00'}</span></div>
           </div>
-          <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
-          <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 长按粘贴或输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后回到本页，自动弹出激活码</div>
+          <div style="margin:14px auto 6px;max-width:250px;border-radius:18px;padding:10px;background:linear-gradient(135deg,#2e9e5b,#22b366);box-shadow:0 10px 26px rgba(34,179,102,.28)">
+            <div style="background:#fff;border-radius:12px;padding:10px;text-align:center">
+              <img src="${esc(CFG.WECHAT_QR_URL)}" style="width:100%;display:block;border-radius:6px" alt="收款码"/>
+              <div style="margin-top:8px;font-size:12.5px;font-weight:800;color:#22b366;letter-spacing:2px">微信扫一扫 · 长按识别</div>
+            </div>
+          </div>
+          <div class="tip">⚠️ 付款金额必须与红色数字完全一致，付款后本页自动弹出激活码</div>
           <div id="st" class="small">⏳ 等待支付中…（付款后不用刷新，本页会自动监测）</div>
           <div id="cd" class="small" style="color:#c2554f;font-weight:700"></div>
           <div id="code"></div>
           <button class="btn" style="background:#2e9e5b;margin-top:12px" onclick="openQModal()">✅ 我已付款 · 查询结果</button>
-          <div id="help" style="display:none;background:#fff8e6;border:1px solid #e8b93c;border-radius:10px;padding:10px;margin-top:12px;font-size:12.5px;line-height:1.8">
-            😓 <b>超过 1 分钟还没监测到付款？</b><br/>
-            最常见原因：<b>金额没按红色数字付</b>（差一分钱都识别不了）。<br/>
-            ① 回忆一下是否按 <b>¥${esc(o.amount)}</b> 付款；付错了没关系，钱不会丢<br/>
-            ② 加微信 <b style="font-size:15px">${CFG.WECHAT}</b>，把订单号发给他人工补发：<b>${esc(o.order_no)}</b>（点击复制）<br/>
-            <button class="btn" style="background:#888;margin-top:6px" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='✓ 订单号已复制'">📋 复制订单号</button>
-          </div>
-          <div class="tip">任何问题加微信 <b>${CFG.WECHAT}</b> 秒回复（发货·退款·开票都可以）</div>
-          <div class="tip">拿到激活码 → 打开「甜老板·私域助手」→ 我的 → 个人中心 → 粘贴激活<br/>有疑问加微信 <b>${CFG.WECHAT}</b></div>
+          <div class="tip" style="margin-top:10px">有疑问加微信 <b>${CFG.WECHAT}</b></div>
           <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99;align-items:center;justify-content:center">
             <div style="background:#fff;border-radius:16px;padding:24px 20px;max-width:320px;width:86%;text-align:center">
               <div style="font-size:38px">🎉</div>
@@ -255,7 +251,7 @@ const server = http.createServer(async (req, res) => {
             }
             CHECKS++;
             if(showHint||CHECKS===3){
-              document.getElementById('st').innerHTML='⏳ 暂未查到本页订单（¥${esc(o.amount)}）的付款记录<br/><span style="font-size:11px">· 刚付完款请等 5 秒再点一次查询<br/>· 若付款金额不是 ¥${esc(o.amount)}，请回到付款时那张页面查询<br/>· 还是不行加微信 <b>${CFG.WECHAT}</b> 报订单号人工处理</span>';
+              document.getElementById('st').innerHTML='⏳ 暂未查到付款（¥${esc(o.amount)}）<br/><span style="font-size:11px">刚付完请等 5 秒再查；金额不是 ¥${esc(o.amount)} 请回付款页查询；不行加微信 <b>${CFG.WECHAT}</b> 报订单号</span>';
             }
             return false;
           }
@@ -280,8 +276,6 @@ const server = http.createServer(async (req, res) => {
           }
           /* 从微信切回本页时自动立即核查一次 */
           document.addEventListener('visibilitychange',()=>{ if(!document.hidden) manualCheck(); });
-          /* 60 秒还没结果 → 弹出醒目求助框（付错金额自助补救） */
-          setTimeout(()=>{ const h=document.getElementById('help'); if(h&&!CODE_SAVED) h.style.display='block'; },60000);
           poll(false); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
           const cdEl=document.getElementById('cd');
           const cdTick=()=>{ if(CODE_SAVED) return; const m=Math.floor(LEFT/60), s=LEFT%60; cdEl.innerHTML='⏰ 本单 <b>'+m+'分'+String(s).padStart(2,'0')+'秒</b> 内有效，超时请重新购买'; };
