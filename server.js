@@ -322,8 +322,10 @@ const server = http.createServer(async (req, res) => {
         /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。若窗口内只有 1 笔待付订单，那必然是他的 → 直接匹配，
            避免"付了钱但差一分钱发不出码"的死局；多笔并发时不猜，交人工 */
         if (!rows.length) {
-          const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no&order=created_at.asc');
-          if (all.length === 1) rows = all;
+          const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no,amount&order=created_at.asc');
+          /* 兜底只允许"唯一待付订单 且 推送价与订单价相差 ≤0.5 元"（容错手滑几分钱）；
+             金额风马牛不相及（如测试推送）绝不误吞真实库存 */
+          if (all.length === 1 && Math.abs(parseFloat(all[0].amount || CFG.PRICE) - parseFloat(price || '0')) <= 0.5) rows = all;
         }
         if (rows.length) {
           await markPaid(rows[0].order_no);
