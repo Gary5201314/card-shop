@@ -92,6 +92,9 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
   try {
+    /* 保活探针（自我访问用，零开销） */
+    if (p === '/ping') return res.end('pong');
+
     /* 买卡首页 */
     if (p === '/' ) {
       const payTip = vmqReady()
@@ -517,3 +520,14 @@ async function deliverCode(orderNo) {
 }
 
 server.listen(CFG.PORT, () => console.log('card-shop running on ' + CFG.PORT));
+
+/* ---------- 免费实例保活：Render 免费版 15 分钟无访问会休眠（首访多等20-50秒）。
+   每 9 分钟请求一次自身 /ping（走公网域名，算有效流量），V免签心跳之外的双保险 ---------- */
+const SELF_URL = CFG.BASE_URL || ('https://' + (process.env.RENDER_EXTERNAL_HOSTNAME || ''));
+if (SELF_URL.startsWith('https://')) {
+  setInterval(() => {
+    const rq = https.get(SELF_URL + '/ping', res => { res.resume(); });
+    rq.on('error', () => {});
+    rq.setTimeout(20000, () => rq.destroy());
+  }, 9 * 60000).unref();
+}
