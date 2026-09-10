@@ -209,12 +209,11 @@ const server = http.createServer(async (req, res) => {
       }
       return res.end(page('微信扫码付款', `
           <h1>微信扫码付款</h1>
-          <div class="small">订单号：${esc(o.order_no)} <a href="javascript:void(0)" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='📋 已复制'" style="color:#2e9e5b;font-weight:700">📋 复制订单号（联系客服要用）</a></div>
+          <div class="small">订单号：${esc(o.order_no)} <a href="javascript:void(0)" onclick="navigator.clipboard.writeText('${esc(o.order_no)}');this.textContent='已复制 ✓'" style="color:#2e9e5b;font-weight:700">📋 复制</a></div>
           <div style="background:#fff4f4;border:2px dashed #d64545;border-radius:14px;padding:14px;text-align:center;margin:10px 0">
             <div style="font-size:13px;color:#d64545;font-weight:700">⚠️ 必须按下面金额精确支付，一分都不能差！</div>
-            <div style="font-size:44px;font-weight:900;color:#d64545;line-height:1.2;margin:4px 0">¥${esc(o.amount).slice(0, -3)}<span style="font-size:52px;text-decoration:underline">${esc(o.amount).slice(-3, -1)}<span style="background:#ffe08a;padding:0 4px;border-radius:6px">${esc(o.amount).slice(-2)}</span></span></div>
-            <div style="font-size:12px;color:#8a817a">红色圈住的 <b>${esc(o.amount).slice(-2)}</b> 是小数位，很多人漏掉这一步导致发码失败</div>
-            <button class="btn" style="background:#d64545;margin-top:8px" onclick="navigator.clipboard.writeText('${esc(o.amount)}').then(()=>{this.textContent='✓ 已复制金额 '+ '${esc(o.amount)}';setTimeout(()=>{this.textContent='📋 一键复制金额'},1200)})">📋 一键复制金额</button>
+            <div style="font-size:48px;font-weight:900;color:#d64545;line-height:1.25;margin:4px 0;letter-spacing:1px">¥${esc(o.amount).split('.')[0]}<span style="background:#ffe08a;padding:0 6px;border-radius:8px">.${esc(o.amount).split('.')[1] || '00'}</span></div>
+            <div style="font-size:12px;color:#8a817a">黄色部分 <b>.${esc(o.amount).split('.')[1] || '00'}</b> 也要输对（用于自动识别你的订单）</div>
           </div>
           <div style="text-align:center;margin:10px 0"><img src="${esc(CFG.WECHAT_QR_URL)}" style="width:230px;border-radius:12px" alt="收款码"/></div>
           <div class="feat">① 截图/长按保存上方收款二维码<br/>② 微信「扫一扫」→ 从相册选码 → 长按粘贴或输入金额 <b>¥${esc(o.amount)}</b> → 付款<br/>③ 付款成功后回到本页，自动弹出激活码</div>
