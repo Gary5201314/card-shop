@@ -74,7 +74,8 @@ textarea{width:100%;height:120px;border:1.5px solid #e6d5bd;border-radius:10px;p
 input{width:100%;border:1.5px solid #e6d5bd;border-radius:10px;padding:10px;font-size:14px;margin:6px 0}
 .small{font-size:12px;color:#9a7b55;line-height:1.8;margin:8px 0}
 a{color:#a9763f}
-</style></head><body><div class="card">${bodyHtml}</div></body></html>`;
+.ver{text-align:center;font-size:10px;color:#cdbba4;margin-top:14px}
+</style></head><body><div class="card">${bodyHtml}<div class="ver">页面版本 V2004 · 看不到这行说明是旧缓存页</div></div></body></html>`;
 }
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
