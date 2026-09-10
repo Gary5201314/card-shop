@@ -145,8 +145,9 @@ const server = http.createServer(async (req, res) => {
         }
       }
       await sb('POST', '/shop_orders', { order_no: orderNo, status: 'pending', amount });
-      /* 302 跳转到订单专属页：之后刷新/回退都不会再新建订单 */
-      res.writeHead(302, { Location: '/pay/' + orderNo });
+      /* 302 跳转到订单专属页：之后刷新/回退都不会再新建订单。
+         cookie 记录该浏览器最新订单：客户犹豫重开多单时，付款后任意一张页面都能弹码 */
+      res.writeHead(302, { Location: '/pay/' + orderNo, 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax' });
       return res.end();
     }
 
@@ -154,7 +155,7 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/pay/TLB')) {
       const orderNo = p.slice(5);
       const ors = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(orderNo) + '&select=order_no,status,amount,code&limit=1');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'tlb_last_order=' + orderNo + '; Max-Age=86400; Path=/; SameSite=Lax' });
       if (!ors.length) {
         return res.end(page('订单不存在', `<h1>订单不存在</h1><div class="tip">请回到购买页重新下单，或加微信 <b>${CFG.WECHAT}</b> 咨询</div>`));
       }
@@ -199,21 +200,30 @@ const server = http.createServer(async (req, res) => {
           </div>
           <script>
           let CHECKS=0, CODE_SAVED='';
+          const OWN='${esc(o.order_no)}';
+          function lastOrder(){ const m=document.cookie.match(/(?:^|;\s*)tlb_last_order=([^;]+)/); return m?m[1]:''; }
+          function showCode(code){
+            document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
+            document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+code+'</div><div class="tip">👆 点击复制激活码</div>';
+            CODE_SAVED=code;
+            document.getElementById('ovcode').textContent=code;
+            document.getElementById('overlay').style.display='flex';
+          }
           async function poll(showHint){
-            try{
-              const r=await fetch('/order/status?id=${esc(o.order_no)}');
-              const j=await r.json();
-              if(j.status==='delivered'&&j.code){
-                document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
-                document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+j.code+'</div><div class="tip">👆 点击复制激活码</div>';
-                CODE_SAVED=j.code;
-                document.getElementById('ovcode').textContent=j.code;
-                const ov=document.getElementById('overlay'); ov.style.display='flex';
-                return true;
-              }
-              if(j.status==='expired'){document.getElementById('st').innerHTML='⌛ 订单已超时（15分钟未支付），请返回重新购买，付款前看清页面金额';CODE_SAVED='EXPIRED';return true;}
-              if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
-            }catch(e){}
+            /* 同时核查：本单 + 该浏览器最新开的订单。
+               客户付款前犹豫、返回重新购买会开多张页面——任意一张付了款，所有页面都会弹码 */
+            const ids=[...new Set([lastOrder(), OWN].filter(Boolean))];
+            for(const id of ids){
+              try{
+                const r=await fetch('/order/status?id='+id);
+                const j=await r.json();
+                if(j.status==='delivered'&&j.code){ showCode(j.code); return true; }
+                if(id===OWN){
+                  if(j.status==='expired'){document.getElementById('st').innerHTML='⌛ 本单已超时，请重新购买（若刚已付款，回到最新购买页即可看到激活码）';CODE_SAVED='EXPIRED';return true;}
+                  if(j.status==='paid'){document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功 · 正在分配激活码…</span>';return false;}
+                }
+              }catch(e){}
+            }
             CHECKS++;
             if(showHint||CHECKS===3){
               document.getElementById('st').innerHTML='⏳ 后台正在核实你的付款，请等几秒…<br/><span style="font-size:11px">若 1 分钟后仍无结果：请确认支付金额精确为 <b>¥${esc(o.amount)}</b>，或加微信 <b>${CFG.WECHAT}</b> 处理</span>';
