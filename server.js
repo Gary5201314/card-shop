@@ -128,6 +128,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/buy') {
+      /* 订单记忆：同浏览器已有未过期的待付订单 → 直接回那张支付页（金额不变、不开新单），
+         刷新/返回/重复点购买都收敛到同一张页面，杜绝"怎么又是9.9"的困惑 */
+      const cm = (req.headers.cookie || '').match(/(?:^|;\s*)tlb_last_order=([^;]+)/);
+      if (cm) {
+        const prev = decodeURIComponent(cm[1]);
+        try {
+          const pr = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(prev) + '&select=order_no,created_at&limit=1');
+          if (pr.length && pr[0].created_at && new Date(pr[0].created_at).getTime() > Date.now() - CFG.VMQ_MINUTES * 60000) {
+            res.writeHead(302, { Location: '/pay/' + prev });
+            return res.end();
+          }
+        } catch (e) {}
+      }
       const orderNo = 'TLB' + Date.now() + Math.floor(Math.random() * 900 + 100);
       /* V免签模式：分配唯一支付金额（基准价起每次 +0.01，避开近 N 分钟 pending 订单占用的金额）。
          单人购买永远 = 基准价 9.90；只有多人同时付款才 +0.01 区分（V免签到账通知里只有金额可辨认） */
