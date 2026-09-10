@@ -248,13 +248,13 @@ const server = http.createServer(async (req, res) => {
             }
             CHECKS++;
             if(showHint||CHECKS===3){
-              document.getElementById('st').innerHTML='⏳ 后台正在核实你的付款，请等几秒…<br/><span style="font-size:11px">若 1 分钟后仍无结果：请确认支付金额精确为 <b>¥${esc(o.amount)}</b>，或加微信 <b>${CFG.WECHAT}</b> 处理</span>';
+              document.getElementById('st').innerHTML='⏳ 暂未查到本页订单（¥${esc(o.amount)}）的付款记录<br/><span style="font-size:11px">· 刚付完款请等 5 秒再点一次查询<br/>· 若付款金额不是 ¥${esc(o.amount)}，请回到付款时那张页面查询<br/>· 还是不行加微信 <b>${CFG.WECHAT}</b> 报订单号人工处理</span>';
             }
             return false;
           }
           async function manualCheck(){
             document.getElementById('st').innerHTML='⏳ 正在向后台核实支付结果，请等 3-10 秒…';
-            const done=await poll(false);
+            const done=await poll(true);
             if(!done) setTimeout(poll,2500);
           }
           /* 从微信切回本页时自动立即核查一次 */
@@ -366,6 +366,10 @@ const server = http.createServer(async (req, res) => {
       if (o.status === 'paid' && !o.code) await deliverCode(id);
       const rows2 = await sb('GET', '/shop_orders?order_no=eq.' + encodeURIComponent(id) + '&select=*');
       const o2 = rows2[0] || o;
+      /* 查询记录仪：客户每次点"我已付款·立即查询"都落一条日志，后台可查 —— 定责用 */
+      try {
+        await sb('POST', '/shop_codes', { code: '__vmq_push_' + Date.now(), status: 'system', sold_at: new Date().toISOString(), order_no: ('页面查询 ' + id + ' → ' + o2.status + (o2.code ? ' 有码' : ' 无码')).slice(0, 60) });
+      } catch (e) {}
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: o2.status, code: o2.code || null, amount: o2.amount || null }));
     }
