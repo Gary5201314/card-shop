@@ -268,7 +268,7 @@ const server = http.createServer(async (req, res) => {
       req.on('end', async () => {
         if (u.searchParams.get('key') !== CFG.ADMIN_KEY) { res.writeHead(403); return res.end('{"error":"密钥错误"}'); }
         const j = JSON.parse(body || '{}');
-        const list = String(j.codes || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const list = [...new Set(String(j.codes || '').split(/[\r\n,;，；]/).map(s => s.trim()).filter(Boolean))];
         if (!list.length) { res.writeHead(200); return res.end('{"error":"没有内容"}'); }
         await sb('POST', '/shop_codes', list.map(c => ({ code: c, status: 'unused' })));
         res.writeHead(200, { 'Content-Type': 'application/json' });
