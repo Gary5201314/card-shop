@@ -75,7 +75,7 @@ input{width:100%;border:1.5px solid #e6d5bd;border-radius:10px;padding:10px;font
 .small{font-size:12px;color:#9a7b55;line-height:1.8;margin:8px 0}
 a{color:#a9763f}
 .ver{text-align:center;font-size:10px;color:#cdbba4;margin-top:14px}
-</style></head><body><div class="card">${bodyHtml}<div class="ver">页面版本 V2005 · 看不到这行说明是旧缓存页</div></div></body></html>`;
+</style></head><body><div class="card">${bodyHtml}<div class="ver">页面版本 V2006 · 看不到这行说明是旧缓存页</div></div></body></html>`;
 }
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -204,9 +204,11 @@ const server = http.createServer(async (req, res) => {
             <div style="background:#fff;border-radius:16px;padding:24px 20px;max-width:320px;width:86%;text-align:center">
               <div style="font-size:38px">🎉</div>
               <div style="font-size:17px;font-weight:800;margin:6px 0 4px">支付成功！激活码已生成</div>
-              <div class="code-box" id="ovcode" onclick="navigator.clipboard.writeText(this.textContent.trim());this.textContent='已复制 ✓';setTimeout(()=>{this.textContent=CODE_SAVED},900)" style="cursor:pointer"></div>
-              <div class="small">👆 点击复制激活码</div>
-              <button class="btn" style="margin-top:12px" onclick="this.parentElement.parentElement.style.display='none'">知道了</button>
+              <div class="code-box" id="ovcode" style="cursor:pointer"></div>
+              <div class="small">点击激活码可复制</div>
+              <button class="btn" style="margin-top:14px" onclick="copyCode()">📋 复制激活码</button>
+              <button class="btn" style="background:#d3691e;margin-top:8px" onclick="goActivate()">🚀 一键去激活（自动带上激活码）</button>
+              <button class="btn" style="background:#aaa;margin-top:8px" onclick="document.getElementById('overlay').style.display='none'">稍后再说</button>
             </div>
           </div>
           <div id="qmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
@@ -225,11 +227,22 @@ const server = http.createServer(async (req, res) => {
             document.getElementById('st').innerHTML='⌛ 本单已超时（${CFG.VMQ_MINUTES}分钟未支付）<br/><a href="/buy" style="color:#2e9e5b;font-weight:700">🔄 点击重新购买</a><span style="font-size:11px;color:#8a817a">（放心：同浏览器任何一单付款成功，本页都会自动弹出激活码）</span>';
             document.getElementById('cd').innerHTML='';
           }
+          const TOOLU='https://tianlaoban-tool.onrender.com';
+          function copyCode(){
+            const done=()=>{ alert('✓ 激活码已复制到剪贴板'); };
+            if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(CODE_SAVED).then(done).catch(()=>prompt('请长按复制激活码：', CODE_SAVED)); }
+            else prompt('请长按复制激活码：', CODE_SAVED);
+          }
+          function goActivate(){
+            try{ if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(CODE_SAVED); }catch(e){}
+            location.href=TOOLU+'/?autocode='+encodeURIComponent(CODE_SAVED);
+          }
           function showCode(code){
             document.getElementById('st').innerHTML='<span class="ok">✅ 支付成功，激活码已生成</span>';
-            document.getElementById('code').innerHTML='<div class="code-box" onclick="navigator.clipboard.writeText(this.textContent.trim());alert(\'已复制\')">'+code+'</div><div class="tip">👆 点击复制激活码</div>';
+            document.getElementById('code').innerHTML='<div class="code-box" onclick="copyCode()">'+code+'</div><div class="tip">👆 点激活码复制 · 或点上面「一键去激活」直达</div>';
             CODE_SAVED=code;
             document.getElementById('ovcode').textContent=code;
+            document.getElementById('ovcode').onclick=copyCode;
             document.getElementById('overlay').style.display='flex';
           }
           async function poll(showHint){
@@ -274,9 +287,19 @@ const server = http.createServer(async (req, res) => {
             if(found){ m.style.display='none'; showCode(found); return; }
             q.innerHTML='<div style="font-size:34px">⏳</div><div style="font-size:15px;font-weight:800;margin:8px 0">暂未查到付款记录</div><div class="small" style="text-align:left;line-height:1.9">· 刚付完款请等 5 秒，点下面「再查一次」<br/>· 付款金额必须精确等于 <b>¥${esc(o.amount)}</b><br/>· 若付款金额不是本页金额，请回到付款那张页面查询<br/>· 不行就加微信 <b>${CFG.WECHAT}</b> 报订单号 <b>${esc(o.order_no)}</b> 人工补发</div><button class="btn" style="background:#2e9e5b;margin-top:10px" onclick="openQModal()">🔄 再查一次</button>';
           }
-          /* 从微信切回本页时自动立即核查一次 */
-          document.addEventListener('visibilitychange',()=>{ if(!document.hidden) manualCheck(); });
-          poll(false); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
+          /* 从微信切回本页：弹窗提示并自动整页刷新。
+             部分手机 WebView 切后台会冻结 JS 轮询，回来后点"查询结果"可能拿到假死结果——
+             整页刷新是最可靠的兜底；刷新后页面重查，已付款立即弹码（限 4 次防循环） */
+          let RLC=0;
+          document.addEventListener('visibilitychange',()=>{
+            if(document.hidden || CODE_SAVED) return;
+            RLC++;
+            if(RLC>4) return;
+            const m=document.getElementById('qmodal'); m.style.display='flex';
+            document.getElementById('qbody').innerHTML='<div style="font-size:34px">🔄</div><div style="font-size:15px;font-weight:800;margin:8px 0">检测到你已从微信返回<br/>正在自动刷新页面查询付款结果…</div><div class="small">约 1 秒，请稍候</div>';
+            setTimeout(()=>location.reload(),900);
+          });
+          poll(false); setTimeout(()=>{ if(!CODE_SAVED) poll(false); },900); setInterval(()=>{ if(!CODE_SAVED) poll(false); },2500);
           const cdEl=document.getElementById('cd');
           const cdTick=()=>{ if(CODE_SAVED) return; const m=Math.floor(LEFT/60), s=LEFT%60; cdEl.innerHTML='⏰ 本单 <b>'+m+'分'+String(s).padStart(2,'0')+'秒</b> 内有效，超时请重新购买'; };
           cdTick(); setInterval(cdTick,1000);
