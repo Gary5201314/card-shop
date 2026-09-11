@@ -313,11 +313,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
         let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price2) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
-        /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。窗口内金额相差 ≤0.5 元的 pending 订单若只有 1 笔，
-           那必然是他的 → 直接匹配；多笔接近时不猜，交人工 */
+        /* 兜底：金额没精确匹配上（客户手滑丢了分位，如 9.92 的单付成 9.9）。窗口内金额相差 ≤0.02 元的
+           pending 订单若只有 1 笔才自动发；多笔接近或差得更多 → 绝不自动发，交人工（不能±0.5宽放，等于降价卖） */
         if (!rows.length) {
           const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no,amount&order=created_at.asc');
-          const near = all.filter(o => Math.abs(parseFloat(o.amount || CFG.PRICE) - parseFloat(price || '0')) <= 0.5);
+          const near = all.filter(o => Math.abs(parseFloat(o.amount || CFG.PRICE) - parseFloat(price || '0')) <= 0.02 && Math.abs(parseFloat(o.amount || CFG.PRICE) - parseFloat(price || '0')) > 0.0001);
           if (near.length === 1) rows = [near[0]];
         }
         if (rows.length) {
