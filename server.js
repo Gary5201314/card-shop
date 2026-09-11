@@ -307,17 +307,18 @@ const server = http.createServer(async (req, res) => {
         if (Math.random() < 0.1) { const cutoff = new Date(Date.now() - 2 * 86400000).toISOString(); try { await sb('DELETE', '/shop_codes?code=like.__vmq_push_*&sold_at=lt.' + cutoff); } catch (e) {} }
       } catch (e) {}
       if (!signOk) return res.end('{"code":-1,"msg":"签名校验不通过"}');
-      /* 按金额匹配近 N 分钟内最早的 pending 订单 → 标记已付 → 自动发码 */
+      /* 金额统一两位小数再匹配：V免签推 "9.9"，库里存 "9.90"，字符串不等会导致精确匹配失败（2026-09-11 实战踩坑） */
+      const price2 = parseFloat(price || '0').toFixed(2);
+      /* 按金额精确匹配近 N 分钟内最早的 pending 订单 → 标记已付 → 自动发码 */
       try {
         const since = new Date(Date.now() - CFG.VMQ_MINUTES * 60000).toISOString();
-        let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
-        /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。若窗口内只有 1 笔待付订单，那必然是他的 → 直接匹配，
-           避免"付了钱但差一分钱发不出码"的死局；多笔并发时不猜，交人工 */
+        let rows = await sb('GET', '/shop_orders?status=eq.pending&amount=eq.' + encodeURIComponent(price2) + '&created_at=gte.' + since + '&order=created_at.asc&limit=1');
+        /* 兜底：金额没精确匹配上（客户手滑付错几分钱）。窗口内金额相差 ≤0.5 元的 pending 订单若只有 1 笔，
+           那必然是他的 → 直接匹配；多笔接近时不猜，交人工 */
         if (!rows.length) {
           const all = await sb('GET', '/shop_orders?status=eq.pending&created_at=gte.' + since + '&select=order_no,amount&order=created_at.asc');
-          /* 兜底只允许"唯一待付订单 且 推送价与订单价相差 ≤0.5 元"（容错手滑几分钱）；
-             金额风马牛不相及（如测试推送）绝不误吞真实库存 */
-          if (all.length === 1 && Math.abs(parseFloat(all[0].amount || CFG.PRICE) - parseFloat(price || '0')) <= 0.5) rows = all;
+          const near = all.filter(o => Math.abs(parseFloat(o.amount || CFG.PRICE) - parseFloat(price || '0')) <= 0.5);
+          if (near.length === 1) rows = [near[0]];
         }
         if (rows.length) {
           await markPaid(rows[0].order_no);
